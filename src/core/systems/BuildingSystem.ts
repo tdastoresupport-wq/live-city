@@ -1,5 +1,5 @@
 import { WorldState } from '../state/WorldState';
-import { Building, BuildingBlueprint, BuildingType, VotingOption, VotingSession } from '../types';
+import type { Building, BuildingBlueprint, BuildingType, VotingOption, VotingSession } from '../types';
 import { generateId } from '../utils/id';
 
 export class BuildingSystem {

@@ -1,8 +1,8 @@
-import {
+import type {
   ExternalStreamPayload,
   ILiveBridgeTransport,
   BridgeTransportConnectOptions,
-} from './TikTokLiveAdapter';
+} from '../types/adapter';
 
 export interface ValidateBridgeUrlOptions {
   allowLoopback?: boolean;

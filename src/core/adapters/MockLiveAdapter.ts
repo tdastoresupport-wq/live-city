@@ -1,4 +1,4 @@
-import {
+import type {
   ILiveEventAdapter,
   LiveConnectionState,
   RawLiveComment,

@@ -1,4 +1,4 @@
-import { GameEvent, ParsedCommand } from './index';
+import type { GameEvent, ParsedCommand } from './index';
 
 export type LiveConnectionStatus =
   | 'disconnected'
@@ -20,6 +20,43 @@ export interface LiveConnectionState {
   subscriptionVerified?: boolean;
   eventsReceived: number;
   reconnectAttempts: number;
+}
+
+export interface ExternalStreamPayload {
+  type: 'comment' | 'gift' | 'like' | 'connected' | 'disconnected' | 'error';
+  eventId?: string;
+  userId?: string;
+  uniqueId?: string;
+  nickname?: string;
+  comment?: string;
+  giftName?: string;
+  repeatCount?: number;
+  diamondCount?: number;
+  likeCount?: number;
+  totalLikeCount?: number;
+  timestamp?: number;
+  error?: string;
+}
+
+export interface BridgeTransportConnectOptions {
+  requireAck?: boolean;
+  ackTimeoutMs?: number;
+  connectTimeoutMs?: number;
+  allowLoopback?: boolean;
+  allowedHosts?: string[];
+  dnsTimeoutMs?: number;
+}
+
+export interface ILiveBridgeTransport {
+  connect(
+    channelId: string,
+    bridgeUrl: string,
+    options?: BridgeTransportConnectOptions
+  ): Promise<void>;
+  disconnect(): Promise<void>;
+  onMessage(cb: (payload: ExternalStreamPayload) => void): () => void;
+  onClose(cb: (reason?: string) => void): () => void;
+  isSubscriptionVerified?(): boolean;
 }
 
 export interface RawLiveComment {
@@ -65,6 +102,7 @@ export interface ILiveEventAdapter {
 export interface IPersistenceAdapter {
   save(key: string, data: unknown): Promise<void>;
   load<T>(key: string, fallback: T): Promise<T>;
+  loadBackup?<T>(key: string, fallback: T): Promise<T>;
   remove(key: string): Promise<void>;
   clear(): Promise<void>;
 }

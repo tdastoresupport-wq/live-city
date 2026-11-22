@@ -3,19 +3,20 @@ import * as crypto from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { GameEngine } from '../core/engine/GameEngine';
 import { FilePersistenceAdapter } from '../core/adapters/FilePersistenceAdapter';
-import {
-  TikTokLiveAdapter,
+import { TikTokLiveAdapter } from '../core/adapters/TikTokLiveAdapter';
+import type {
   ExternalStreamPayload,
   ILiveBridgeTransport,
-} from '../core/adapters/TikTokLiveAdapter';
+} from '../core/types/adapter';
 import { WebSocketBridgeTransport } from '../core/adapters/WebSocketBridgeTransport';
-import {
+import type {
   BuildingType,
   CityEventType,
   IPersistenceAdapter,
   LiveConnectionState,
 } from '../core/types';
-import { upgradeToWebSocket, WsClient } from './wsProtocol';
+import { upgradeToWebSocket } from './wsProtocol';
+import type { WsClient } from './wsProtocol';
 
 export interface GameServerOptions {
   port?: number;

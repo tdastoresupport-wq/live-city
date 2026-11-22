@@ -1,4 +1,4 @@
-import { CommandAction, ParsedCommand, RawLiveComment } from '../types';
+import type { CommandAction, ParsedCommand, RawLiveComment } from '../types';
 
 export const MAX_COMMENT_LENGTH = 80;
 export const MAX_USERNAME_LENGTH = 36;

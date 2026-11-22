@@ -1,4 +1,7 @@
-import {
+import type {
+  BridgeTransportConnectOptions,
+  ExternalStreamPayload,
+  ILiveBridgeTransport,
   ILiveEventAdapter,
   LiveConnectionState,
   RawLiveComment,
@@ -13,42 +16,11 @@ import {
   validateBridgeUrl,
 } from './WebSocketBridgeTransport';
 
-export interface ExternalStreamPayload {
-  type: 'comment' | 'gift' | 'like' | 'connected' | 'disconnected' | 'error';
-  eventId?: string;
-  userId?: string;
-  uniqueId?: string;
-  nickname?: string;
-  comment?: string;
-  giftName?: string;
-  repeatCount?: number;
-  diamondCount?: number;
-  likeCount?: number;
-  totalLikeCount?: number;
-  timestamp?: number;
-  error?: string;
-}
-
-export interface BridgeTransportConnectOptions {
-  requireAck?: boolean;
-  ackTimeoutMs?: number;
-  connectTimeoutMs?: number;
-  allowLoopback?: boolean;
-  allowedHosts?: string[];
-  dnsTimeoutMs?: number;
-}
-
-export interface ILiveBridgeTransport {
-  connect(
-    channelId: string,
-    bridgeUrl: string,
-    options?: BridgeTransportConnectOptions
-  ): Promise<void>;
-  disconnect(): Promise<void>;
-  onMessage(cb: (payload: ExternalStreamPayload) => void): () => void;
-  onClose(cb: (reason?: string) => void): () => void;
-  isSubscriptionVerified?(): boolean;
-}
+export type {
+  BridgeTransportConnectOptions,
+  ExternalStreamPayload,
+  ILiveBridgeTransport,
+};
 
 export interface TikTokLiveAdapterOptions {
   channelId?: string;

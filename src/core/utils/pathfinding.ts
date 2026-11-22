@@ -1,4 +1,4 @@
-import { WorldTile } from '../types';
+import type { WorldTile } from '../types';
 
 export interface Point {
   x: number;

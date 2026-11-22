@@ -1,5 +1,5 @@
 import { WorldState } from '../state/WorldState';
-import { CityActiveEvent, CityEventType, ResourceType } from '../types';
+import type { CityActiveEvent, CityEventType, ResourceType } from '../types';
 import { generateId } from '../utils/id';
 
 export class ResourceSystem {

@@ -1,4 +1,5 @@
-import { WorldState, WorldSnapshot } from '../state/WorldState';
+import { WorldState } from '../state/WorldState';
+import type { WorldSnapshot } from '../state/WorldState';
 import { CitizenSystem } from '../systems/CitizenSystem';
 import { ResourceSystem } from '../systems/ResourceSystem';
 import { BuildingSystem } from '../systems/BuildingSystem';
@@ -6,7 +7,7 @@ import { AudioSystem } from '../systems/AudioSystem';
 import { CommandDispatcher } from '../commands/CommandDispatcher';
 import { MockLiveAdapter } from '../adapters/MockLiveAdapter';
 import { LocalStoragePersistence } from '../adapters/LocalStoragePersistence';
-import {
+import type {
   IAudioSystem,
   ILiveEventAdapter,
   IPersistenceAdapter,

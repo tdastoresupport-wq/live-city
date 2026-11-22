@@ -1,4 +1,4 @@
-import { RawLiveComment, RawLiveGift, RawLiveLike, ParsedCommand } from '../types';
+import type { RawLiveComment, RawLiveGift, RawLiveLike, ParsedCommand } from '../types';
 import { CommandParser } from './CommandParser';
 import { RateLimiter } from './RateLimiter';
 import { Deduplicator } from './Deduplicator';

@@ -1,9 +1,9 @@
-import { Citizen, ResourceNode, ResourceType } from '../types';
+import type { Citizen, ResourceNode, ResourceType } from '../types';
 import { WorldState } from '../state/WorldState';
 import { findPath } from '../utils/pathfinding';
 import { distance, randomInt } from '../utils/math';
 import { generateId, getAvatarColor } from '../utils/id';
-import { IAudioSystem } from '../types/adapter';
+import type { IAudioSystem } from '../types/adapter';
 
 export const INACTIVITY_REST_TIMEOUT_MS = 180_000; // 3 minutes
 

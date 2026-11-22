@@ -9,13 +9,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node --experimental-strip-types src/server/index.ts",
+    "server": "node --import ./scripts/ts-loader.mjs --experimental-strip-types src/server/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:smoke": "node --import ./scripts/ts-loader.mjs --experimental-strip-types scripts/run-smoke-test.ts",
+    "test:load": "node --import ./scripts/ts-loader.mjs --experimental-strip-types scripts/run-load-test.ts"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

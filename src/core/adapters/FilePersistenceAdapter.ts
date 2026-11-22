@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { IPersistenceAdapter } from '../types/adapter';
+import type { IPersistenceAdapter } from '../types/adapter';
 
 /**
  * Node.js File System Persistence Adapter with backup creation and corruption recovery.

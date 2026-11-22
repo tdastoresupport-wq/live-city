@@ -1,4 +1,4 @@
-import { IAudioSystem } from '../types/adapter';
+import type { IAudioSystem } from '../types/adapter';
 
 export class AudioSystem implements IAudioSystem {
   private ctx: AudioContext | null = null;
