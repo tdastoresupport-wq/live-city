@@ -99,7 +99,18 @@ export class GameServer {
       dnsTimeoutMs: options.dnsTimeoutMs,
     });
 
-    const persistence = options.persistence || new FilePersistenceAdapter();
+    const persistence =
+      options.persistence ||
+      new FilePersistenceAdapter(undefined, (d: unknown) => {
+        if (!d || typeof d !== 'object') return false;
+        const snap = d as Record<string, unknown>;
+        return (
+          snap.resources !== null &&
+          typeof snap.resources === 'object' &&
+          Array.isArray(snap.citizens) &&
+          Array.isArray(snap.buildings)
+        );
+      });
     this.engine = new GameEngine({
       persistence,
       headless: true,
@@ -429,10 +440,56 @@ export class GameServer {
     return { allowed: true };
   }
 
+  private hasTokenQueryParam(rawUrl?: string): boolean {
+    try {
+      const parsed = new URL(rawUrl || '/', 'http://127.0.0.1');
+      for (const key of parsed.searchParams.keys()) {
+        const lower = key.toLowerCase();
+        if (lower === 'token' || lower === 'operatortoken' || lower === 'x-operator-token') {
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private isValidOperatorToken(providedToken: unknown): boolean {
+    if (typeof providedToken !== 'string' || !providedToken || !this.operatorToken) {
+      return false;
+    }
+    const providedBuf = Buffer.from(providedToken, 'utf8');
+    const expectedBuf = Buffer.from(this.operatorToken, 'utf8');
+    if (providedBuf.length !== expectedBuf.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(providedBuf, expectedBuf);
+  }
+
+  private sanitizeJsonObject(input: Record<string, unknown>): Record<string, unknown> {
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        clean[k] = this.sanitizeJsonObject(v as Record<string, unknown>);
+      } else {
+        clean[k] = v;
+      }
+    }
+    return clean;
+  }
+
   public handleWsUpgrade(req: http.IncomingMessage, socket: Duplex, _head?: Buffer): void {
     const access = this.validateRequestAccess(req);
     if (!access.allowed) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (this.hasTokenQueryParam(req.url)) {
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -510,17 +567,22 @@ export class GameServer {
     req: http.IncomingMessage,
     res: http.ServerResponse
   ): Promise<void> {
+    const securityHeaders: Record<string, string> = {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Referrer-Policy': 'no-referrer',
+    };
+
     const access = this.validateRequestAccess(req);
     if (!access.allowed) {
-      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.writeHead(403, securityHeaders);
       res.end(JSON.stringify({ error: access.error || 'Forbidden' }));
       return;
     }
 
-    const corsHeaders: Record<string, string> = {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    };
+    const corsHeaders: Record<string, string> = { ...securityHeaders };
     if (access.allowedCorsOrigin) {
       corsHeaders['Access-Control-Allow-Origin'] = access.allowedCorsOrigin;
       corsHeaders['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
@@ -531,6 +593,17 @@ export class GameServer {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, corsHeaders);
       res.end();
+      return;
+    }
+
+    if (this.hasTokenQueryParam(req.url)) {
+      res.writeHead(400, corsHeaders);
+      res.end(
+        JSON.stringify({
+          error:
+            'Bad Request: Operator token must never be passed in URL query string. Use x-operator-token header.',
+        })
+      );
       return;
     }
 
@@ -592,13 +665,19 @@ export class GameServer {
     // 2. Protected Control & Command POST endpoints
     if (req.method === 'POST') {
       const providedToken = req.headers['x-operator-token'];
-      if (providedToken !== this.operatorToken) {
+      if (!this.isValidOperatorToken(providedToken)) {
         res.writeHead(401, corsHeaders);
         res.end(JSON.stringify({ error: 'Unauthorized: Invalid or missing x-operator-token' }));
         return;
       }
 
-      const body = await this.readJsonBody(req);
+      const parsedBody = await this.readJsonBody(req);
+      if (!parsedBody.ok) {
+        res.writeHead(parsedBody.statusCode || 400, corsHeaders);
+        res.end(JSON.stringify({ error: parsedBody.error || 'Bad Request: Invalid JSON body' }));
+        return;
+      }
+      const body = parsedBody.body;
 
       if (pathname === '/api/command') {
         const cmdType = String(body.type || 'comment');
@@ -838,29 +917,83 @@ export class GameServer {
     res.end(JSON.stringify({ error: 'Not Found' }));
   }
 
-  private readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  private readJsonBody(
+    req: http.IncomingMessage
+  ): Promise<{ ok: boolean; body: Record<string, unknown>; statusCode?: number; error?: string }> {
     return new Promise((resolve) => {
-      let raw = '';
-      req.on('data', (chunk: Buffer) => {
-        raw += chunk.toString('utf-8');
-        if (raw.length > 64 * 1024) {
-          req.destroy();
-          resolve({});
+      const MAX_BYTES = 64 * 1024;
+      let totalBytes = 0;
+      const chunks: Buffer[] = [];
+      let settled = false;
+
+      const finish = (result: {
+        ok: boolean;
+        body: Record<string, unknown>;
+        statusCode?: number;
+        error?: string;
+      }) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      req.on('data', (chunk: Buffer | string) => {
+        if (settled) return;
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : chunk;
+        totalBytes += buf.length;
+        if (totalBytes > MAX_BYTES) {
+          finish({
+            ok: false,
+            body: {},
+            statusCode: 413,
+            error: 'Payload Too Large: JSON body exceeds 64KB limit.',
+          });
+          req.resume();
+          return;
         }
+        chunks.push(buf);
       });
+
       req.on('end', () => {
+        if (settled) return;
+        const raw = Buffer.concat(chunks).toString('utf-8');
         if (!raw.trim()) {
-          resolve({});
+          finish({ ok: true, body: {} });
           return;
         }
         try {
-          const parsed = JSON.parse(raw);
-          resolve(parsed && typeof parsed === 'object' ? parsed : {});
+          const parsed: unknown = JSON.parse(raw);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            finish({
+              ok: false,
+              body: {},
+              statusCode: 400,
+              error: 'Bad Request: JSON request body must be a JSON object.',
+            });
+            return;
+          }
+          finish({
+            ok: true,
+            body: this.sanitizeJsonObject(parsed as Record<string, unknown>),
+          });
         } catch {
-          resolve({});
+          finish({
+            ok: false,
+            body: {},
+            statusCode: 400,
+            error: 'Bad Request: Malformed JSON body.',
+          });
         }
       });
-      req.on('error', () => resolve({}));
+
+      req.on('error', () => {
+        finish({
+          ok: false,
+          body: {},
+          statusCode: 400,
+          error: 'Bad Request: Stream error reading request body.',
+        });
+      });
     });
   }
 
