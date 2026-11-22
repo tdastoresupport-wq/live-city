@@ -2,6 +2,10 @@
   "name": "live-city",
   "version": "0.1.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tdastoresupport-wq/live-city.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

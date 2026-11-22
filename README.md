@@ -7,6 +7,13 @@ Dự án tuân thủ nghiêm ngặt nguyên tắc: **Game Engine tách rời ho�
 
 ---
 
+## 🌐 REPOSITORY CHÍNH THỨC
+- **GitHub:** https://github.com/tdastoresupport-wq/live-city
+- **Clone URL:** `https://github.com/tdastoresupport-wq/live-city.git`
+- **Default Branch:** `main`
+
+---
+
 ## 🚀 HƯỚNG DẪN CÀI ĐẶT VÀ KHỞI CHẠY (QUICK START)
 
 ### 1. Yêu cầu môi trường
