@@ -387,7 +387,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
           userId: rawUserId,
           userName,
           comment: text,
-          timestamp: eventTs,
+          timestamp: now,
         };
 
         this.connectionState.eventsReceived += 1;
@@ -409,7 +409,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
           giftName: CommandParser.sanitizeText(String(payload.giftName || 'Gift'), 36),
           giftCount,
           diamondValue,
-          timestamp: eventTs,
+          timestamp: now,
         };
 
         this.connectionState.eventsReceived += 1;
@@ -430,7 +430,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
           userName,
           likeCount,
           totalLikes,
-          timestamp: eventTs,
+          timestamp: now,
         };
 
         this.connectionState.eventsReceived += 1;

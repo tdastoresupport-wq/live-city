@@ -46,7 +46,11 @@ export class RateLimiter {
       }
     }
 
-    this.lastActionTimes.set(userId, now);
+    const updatedTs = lastTime !== undefined ? Math.max(now, lastTime) : now;
+    if (lastTime !== undefined) {
+      this.lastActionTimes.delete(userId);
+    }
+    this.lastActionTimes.set(userId, updatedTs);
     this.globalTimestamps.push(now);
 
     return {
