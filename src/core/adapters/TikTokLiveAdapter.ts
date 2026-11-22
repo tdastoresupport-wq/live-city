@@ -35,6 +35,7 @@ export interface BridgeTransportConnectOptions {
   connectTimeoutMs?: number;
   allowLoopback?: boolean;
   allowedHosts?: string[];
+  dnsTimeoutMs?: number;
 }
 
 export interface ILiveBridgeTransport {
@@ -54,10 +55,14 @@ export interface TikTokLiveAdapterOptions {
   bridgeUrl?: string;
   transport?: ILiveBridgeTransport;
   connectTimeoutMs?: number;
+  ackTimeoutMs?: number;
   baseBackoffMs?: number;
   maxReconnectAttempts?: number;
   maxReplayAgeMs?: number;
   requireAck?: boolean;
+  allowLoopback?: boolean;
+  allowedHosts?: string[];
+  dnsTimeoutMs?: number;
 }
 
 /**
@@ -138,14 +143,39 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
     return () => this.likeCallbacks.delete(callback);
   }
 
+  public getRequireAck(): boolean {
+    return Boolean(this.options.requireAck);
+  }
+
   public async connect(connectOpts?: {
     channelId?: string;
     bridgeUrl?: string;
     transport?: ILiveBridgeTransport;
     requireAck?: boolean;
+    ackTimeoutMs?: number;
+    allowLoopback?: boolean;
+    allowedHosts?: string[];
+    dnsTimeoutMs?: number;
   }): Promise<void> {
     this.clearReconnectTimer();
     this.manualDisconnect = false;
+
+    // Persist explicit connect options so reconnects and dynamic URL updates retain policy
+    if (connectOpts?.requireAck !== undefined) {
+      this.options.requireAck = connectOpts.requireAck;
+    }
+    if (connectOpts?.ackTimeoutMs !== undefined) {
+      this.options.ackTimeoutMs = connectOpts.ackTimeoutMs;
+    }
+    if (connectOpts?.allowLoopback !== undefined) {
+      this.options.allowLoopback = connectOpts.allowLoopback;
+    }
+    if (connectOpts?.allowedHosts !== undefined) {
+      this.options.allowedHosts = connectOpts.allowedHosts;
+    }
+    if (connectOpts?.dnsTimeoutMs !== undefined) {
+      this.options.dnsTimeoutMs = connectOpts.dnsTimeoutMs;
+    }
 
     const channelId = (connectOpts?.channelId ?? this.options.channelId ?? '').trim();
     let bridgeUrl = (connectOpts?.bridgeUrl ?? this.options.bridgeUrl ?? '').trim();
@@ -167,7 +197,10 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       }
       this.options.transport = connectOpts.transport;
     } else if (bridgeUrl) {
-      const validation = validateBridgeUrl(bridgeUrl);
+      const validation = validateBridgeUrl(bridgeUrl, {
+        allowLoopback: this.options.allowLoopback,
+        allowedHosts: this.options.allowedHosts,
+      });
       if (!validation.valid || !validation.normalized) {
         this.updateState({
           status: 'error',
@@ -196,6 +229,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       status: this.connectionState.reconnectAttempts > 0 ? 'reconnecting' : 'connecting',
       channelId,
       errorMessage: undefined,
+      subscriptionVerified: false,
     });
 
     // If neither an injected transport nor a local bridge URL is configured, report honest BLOCKED/ERROR state
@@ -209,13 +243,19 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       throw new Error('TIKTOK_BRIDGE_NOT_CONFIGURED');
     }
 
-    const requireAck = connectOpts?.requireAck ?? this.options.requireAck ?? false;
+    const requireAck = this.options.requireAck ?? false;
 
     try {
       await this.connectWithTimeout(channelId, this.options.bridgeUrl || '', requireAck);
+      if (this.manualDisconnect) {
+        if (this.options.transport) {
+          await this.options.transport.disconnect().catch(() => {});
+        }
+        return;
+      }
       const isVerified = this.options.transport?.isSubscriptionVerified
         ? this.options.transport.isSubscriptionVerified()
-        : undefined;
+        : false;
       this.updateState({
         status: 'connected',
         channelId,
@@ -225,6 +265,9 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
         errorMessage: undefined,
       });
     } catch (err) {
+      if (this.manualDisconnect) {
+        return;
+      }
       const msg = err instanceof Error ? err.message : 'Kết nối TikTok Bridge thất bại';
       this.updateState({
         status: 'error',
@@ -256,6 +299,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
+        transport.disconnect().catch(() => {});
         reject(new Error(`Quá thời gian chờ kết nối (${this.options.connectTimeoutMs}ms)`));
       }, this.options.connectTimeoutMs);
     });
@@ -265,6 +309,10 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
         transport.connect(channelId, bridgeUrl, {
           connectTimeoutMs: this.options.connectTimeoutMs,
           requireAck,
+          ackTimeoutMs: this.options.ackTimeoutMs,
+          allowLoopback: this.options.allowLoopback,
+          allowedHosts: this.options.allowedHosts,
+          dnsTimeoutMs: this.options.dnsTimeoutMs,
         }),
         timeoutPromise,
       ]);
@@ -372,7 +420,6 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
 
         this.connectionState.eventsReceived += 1;
         this.connectionState.lastEventAt = now;
-        this.connectionState.subscriptionVerified = true;
         for (const cb of this.commentCallbacks) {
           cb(normalized);
         }
@@ -395,7 +442,6 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
 
         this.connectionState.eventsReceived += 1;
         this.connectionState.lastEventAt = now;
-        this.connectionState.subscriptionVerified = true;
         for (const cb of this.giftCallbacks) {
           cb(normalized);
         }
@@ -417,7 +463,6 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
 
         this.connectionState.eventsReceived += 1;
         this.connectionState.lastEventAt = now;
-        this.connectionState.subscriptionVerified = true;
         for (const cb of this.likeCallbacks) {
           cb(normalized);
         }

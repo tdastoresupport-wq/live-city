@@ -25,7 +25,10 @@ export interface GameServerOptions {
   tiktokTransport?: ILiveBridgeTransport;
   allowedOrigins?: string[];
   allowedBridgeHosts?: string[];
+  allowLoopbackBridge?: boolean;
   requireAck?: boolean;
+  ackTimeoutMs?: number;
+  dnsTimeoutMs?: number;
 }
 
 export class GameServer {
@@ -35,6 +38,7 @@ export class GameServer {
   private clients: Set<WsClient> = new Set();
   private host: string;
   private port: number;
+  private attachedPorts: Set<number> = new Set();
   private operatorToken: string;
   private startedAt: number = Date.now();
   private syncInterval: ReturnType<typeof setInterval> | null = null;
@@ -43,6 +47,8 @@ export class GameServer {
   private pendingBroadcast = false;
   private lastBroadcastTime = 0;
   private customAllowedOrigins?: string[];
+  private allowedBridgeHosts?: string[];
+  private allowLoopbackBridge: boolean;
   public requireAck: boolean;
 
   private activePlatform: 'mock' | 'tiktok_experimental' = 'mock';
@@ -59,6 +65,20 @@ export class GameServer {
       options.requireAck ??
       (process.env.TIKTOK_REQUIRE_ACK === 'true' || process.env.TIKTOK_REQUIRE_ACK === '1');
 
+    const envAllowedHosts = process.env.LIVE_CITY_ALLOWED_BRIDGE_HOSTS
+      ? process.env.LIVE_CITY_ALLOWED_BRIDGE_HOSTS.split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : undefined;
+    this.allowedBridgeHosts =
+      options.allowedBridgeHosts !== undefined ? options.allowedBridgeHosts : envAllowedHosts;
+    this.allowLoopbackBridge =
+      options.allowLoopbackBridge ??
+      !(
+        process.env.LIVE_CITY_ALLOW_LOOPBACK_BRIDGE === 'false' ||
+        process.env.LIVE_CITY_ALLOW_LOOPBACK_BRIDGE === '0'
+      );
+
     const bridgeUrl = process.env.TIKTOK_BRIDGE_URL || '';
     this.activePlatform = bridgeUrl ? 'tiktok_experimental' : 'mock';
 
@@ -72,6 +92,10 @@ export class GameServer {
       transport,
       bridgeUrl,
       requireAck: this.requireAck,
+      ackTimeoutMs: options.ackTimeoutMs,
+      allowedHosts: this.allowedBridgeHosts,
+      allowLoopback: this.allowLoopbackBridge,
+      dnsTimeoutMs: options.dnsTimeoutMs,
     });
 
     const persistence = options.persistence || new FilePersistenceAdapter();
@@ -85,6 +109,10 @@ export class GameServer {
     // Listen to live adapter state changes and broadcast
     this.engine.mockAdapter.onStateChange(() => this.scheduleBroadcast(true));
     this.tiktokAdapter.onStateChange(() => this.scheduleBroadcast(true));
+  }
+
+  public getAllowedBridgeHosts(): string[] | undefined {
+    return this.allowedBridgeHosts ? [...this.allowedBridgeHosts] : undefined;
   }
 
   public getOperatorToken(): string {
@@ -191,6 +219,15 @@ export class GameServer {
       use: (fn: (req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void) => void;
     }
   ): void {
+    const recordServerPort = () => {
+      const addr = server.address();
+      if (addr && typeof addr === 'object' && addr.port) {
+        this.attachedPorts.add(addr.port);
+      }
+    };
+    recordServerPort();
+    server.on('listening', recordServerPort);
+
     if (middlewares) {
       middlewares.use((req, res, next) => {
         if (req.url && req.url.startsWith('/api/')) {
@@ -214,25 +251,25 @@ export class GameServer {
     });
   }
 
-  public getAllowedOrigins(): Set<string> {
+  public getAllowedOrigins(localPort?: number): Set<string> {
     const origins = new Set<string>();
+    const addLocalOriginPort = (p: number) => {
+      if (!Number.isInteger(p) || p < 1 || p > 65535) return;
+      origins.add(`http://localhost:${p}`);
+      origins.add(`http://127.0.0.1:${p}`);
+      origins.add(`http://[::1]:${p}`);
+    };
 
     // Standard Vite Dev & Preview ports
-    origins.add('http://localhost:3000');
-    origins.add('http://127.0.0.1:3000');
-    origins.add('http://[::1]:3000');
-    origins.add('http://localhost:5173');
-    origins.add('http://127.0.0.1:5173');
-    origins.add('http://[::1]:5173');
-    origins.add('http://localhost:4173');
-    origins.add('http://127.0.0.1:4173');
-    origins.add('http://[::1]:4173');
+    addLocalOriginPort(3000);
+    addLocalOriginPort(5173);
+    addLocalOriginPort(4173);
 
-    // Standalone server port
-    if (this.port) {
-      origins.add(`http://localhost:${this.port}`);
-      origins.add(`http://127.0.0.1:${this.port}`);
-      origins.add(`http://[::1]:${this.port}`);
+    // Active standalone / attached HTTP server port(s)
+    if (this.port) addLocalOriginPort(this.port);
+    if (localPort) addLocalOriginPort(localPort);
+    for (const p of this.attachedPorts) {
+      addLocalOriginPort(p);
     }
 
     // Configured allowed origins from constructor options
@@ -261,15 +298,79 @@ export class GameServer {
     return origins;
   }
 
-  public isAllowedOrigin(origin?: string): boolean {
-    if (!origin) return true; // Direct same-origin or server-to-server request
-    if (origin === 'null' || origin === 'NULL') {
+  /**
+   * Strict Origin allowlist predicate.
+   * Returns true ONLY when origin is a non-empty valid URL matching the exact allowlist.
+   * Rejects undefined, empty strings, 'null', and unlisted ports/hosts.
+   */
+  public isAllowedOrigin(origin?: string, localPort?: number): boolean {
+    if (!origin || typeof origin !== 'string') return false;
+    const trimmed = origin.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'null') {
       return false; // Reject sandboxed iframe / null origin attacks
     }
     try {
-      const parsed = new URL(origin);
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return false;
+      }
       const normalizedOrigin = parsed.origin.toLowerCase();
-      return this.getAllowedOrigins().has(normalizedOrigin);
+      return this.getAllowedOrigins(localPort).has(normalizedOrigin);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Exact allowed Host header values matching the listening loopback server port(s).
+   */
+  public getAllowedHosts(localPort?: number): Set<string> {
+    const hosts = new Set<string>();
+    const addHostPort = (p: number) => {
+      if (!Number.isInteger(p) || p < 1 || p > 65535) return;
+      hosts.add(`localhost:${p}`);
+      hosts.add(`127.0.0.1:${p}`);
+      hosts.add(`[::1]:${p}`);
+      if (p === 80) {
+        hosts.add('localhost');
+        hosts.add('127.0.0.1');
+        hosts.add('[::1]');
+      }
+    };
+
+    if (this.port) addHostPort(this.port);
+    if (localPort) addHostPort(localPort);
+    for (const p of this.attachedPorts) {
+      addHostPort(p);
+    }
+
+    return hosts;
+  }
+
+  /**
+   * Strictly validates the HTTP Host header against exact loopback host:port bindings.
+   * Protects against DNS rebinding and malformed Host headers (e.g. localhost:evil.com).
+   */
+  public isAllowedHost(hostHeader?: string, localPort?: number): boolean {
+    if (!hostHeader || typeof hostHeader !== 'string') {
+      return false;
+    }
+    const trimmed = hostHeader.trim().toLowerCase();
+    if (!trimmed) return false;
+
+    try {
+      const parsed = new URL(`http://${trimmed}`);
+      if (
+        parsed.username ||
+        parsed.password ||
+        parsed.pathname !== '/' ||
+        parsed.search ||
+        parsed.hash
+      ) {
+        return false;
+      }
+      const canonicalHost = parsed.host.toLowerCase();
+      return this.getAllowedHosts(localPort).has(canonicalHost);
     } catch {
       return false;
     }
@@ -284,9 +385,52 @@ export class GameServer {
     );
   }
 
+  /**
+   * Unified request access policy for HTTP APIs and WebSocket upgrades.
+   * Distinguishes browser CORS/same-origin requests, originless local clients, and untrusted requests.
+   */
+  private validateRequestAccess(req: http.IncomingMessage): {
+    allowed: boolean;
+    error?: string;
+    allowedCorsOrigin?: string;
+  } {
+    // 1. Must arrive over local loopback interface
+    if (!this.isLoopbackAddress(req.socket?.remoteAddress)) {
+      return { allowed: false, error: 'Forbidden: Local loopback access only' };
+    }
+
+    // 2. Consistent Host header verification across all local endpoints and WS upgrades
+    const localPort = req.socket?.localPort;
+    if (!this.isAllowedHost(req.headers.host, localPort)) {
+      return { allowed: false, error: 'Forbidden: Untrusted or invalid Host header' };
+    }
+
+    // 3. Explicit Origin header validation whenever Origin header is present (including '' or 'null')
+    const rawOrigin = req.headers.origin;
+    if (rawOrigin !== undefined) {
+      if (!this.isAllowedOrigin(rawOrigin, localPort)) {
+        return { allowed: false, error: 'Forbidden: Origin not in allowlist' };
+      }
+      // Emit canonical allowlisted origin rather than blindly reflecting raw header value
+      const canonicalOrigin = new URL(rawOrigin.trim()).origin.toLowerCase();
+      return { allowed: true, allowedCorsOrigin: canonicalOrigin };
+    }
+
+    // 4. Originless request (browser same-origin GET or local Node.js client):
+    // Reject browser-marked cross-site fetches even when Origin is absent
+    const secFetchSite = String(req.headers['sec-fetch-site'] || '')
+      .trim()
+      .toLowerCase();
+    if (secFetchSite === 'cross-site') {
+      return { allowed: false, error: 'Forbidden: Cross-site request blocked' };
+    }
+
+    return { allowed: true };
+  }
+
   public handleWsUpgrade(req: http.IncomingMessage, socket: Duplex, _head?: Buffer): void {
-    const origin = req.headers.origin;
-    if (!this.isAllowedOrigin(origin) || !this.isLoopbackAddress(req.socket?.remoteAddress)) {
+    const access = this.validateRequestAccess(req);
+    if (!access.allowed) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
@@ -365,16 +509,10 @@ export class GameServer {
     req: http.IncomingMessage,
     res: http.ServerResponse
   ): Promise<void> {
-    const origin = req.headers.origin;
-    if (origin && !this.isAllowedOrigin(origin)) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Forbidden: Origin not in allowlist' }));
-      return;
-    }
-
-    if (!this.isLoopbackAddress(req.socket?.remoteAddress)) {
-      res.writeHead(403, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Forbidden: Local loopback access only' }));
+    const access = this.validateRequestAccess(req);
+    if (!access.allowed) {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: access.error || 'Forbidden' }));
       return;
     }
 
@@ -382,10 +520,11 @@ export class GameServer {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
     };
-    if (origin && this.isAllowedOrigin(origin)) {
-      corsHeaders['Access-Control-Allow-Origin'] = origin;
+    if (access.allowedCorsOrigin) {
+      corsHeaders['Access-Control-Allow-Origin'] = access.allowedCorsOrigin;
       corsHeaders['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
       corsHeaders['Access-Control-Allow-Headers'] = 'Content-Type, x-operator-token';
+      corsHeaders['Vary'] = 'Origin';
     }
 
     if (req.method === 'OPTIONS') {
@@ -434,27 +573,15 @@ export class GameServer {
       return;
     }
 
-    // Local session bootstrap for Operator Dashboard (strictly allowlist & loopback-verified)
+    // Local session bootstrap for Operator Dashboard (strictly loopback + Host + Origin verified)
     if (req.method === 'GET' && pathname === '/api/auth/session') {
-      if (origin && !this.isAllowedOrigin(origin)) {
+      const secFetchMode = String(req.headers['sec-fetch-mode'] || '')
+        .trim()
+        .toLowerCase();
+      if (secFetchMode === 'no-cors') {
         res.writeHead(403, corsHeaders);
-        res.end(JSON.stringify({ error: 'Forbidden: Origin unauthorized for session bootstrap' }));
+        res.end(JSON.stringify({ error: 'Forbidden: no-cors session bootstrap not allowed' }));
         return;
-      }
-      if (!origin) {
-        const hostHeader = (req.headers.host || '').toLowerCase();
-        const isLocalHost =
-          hostHeader.startsWith('localhost:') ||
-          hostHeader.startsWith('127.0.0.1:') ||
-          hostHeader.startsWith('[::1]:') ||
-          hostHeader === 'localhost' ||
-          hostHeader === '127.0.0.1' ||
-          hostHeader === '[::1]';
-        if (!isLocalHost) {
-          res.writeHead(403, corsHeaders);
-          res.end(JSON.stringify({ error: 'Forbidden: Host header unauthorized' }));
-          return;
-        }
       }
       res.writeHead(200, corsHeaders);
       res.end(JSON.stringify({ operatorToken: this.operatorToken }));
@@ -652,7 +779,13 @@ export class GameServer {
           try {
             const reqAck =
               typeof body.requireAck === 'boolean' ? body.requireAck : this.requireAck;
-            await this.tiktokAdapter.connect({ channelId, bridgeUrl, requireAck: reqAck });
+            await this.tiktokAdapter.connect({
+              channelId,
+              bridgeUrl,
+              requireAck: reqAck,
+              allowedHosts: this.allowedBridgeHosts,
+              allowLoopback: this.allowLoopbackBridge,
+            });
             this.broadcastState();
             res.writeHead(200, corsHeaders);
             res.end(JSON.stringify({ ok: true, liveConnection: this.getActiveLiveState() }));

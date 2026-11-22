@@ -302,7 +302,16 @@ export class GameRuntimeClient {
     }
   }
 
+  public isReadOnlyStage(): boolean {
+    return this.isStageOnly;
+  }
+
+  public hasFallbackEngine(): boolean {
+    return this.fallbackEngine !== null;
+  }
+
   private async ensureToken(): Promise<void> {
+    if (this.isStageOnly) return; // Stage-only observer must never bootstrap operator token
     if (this.operatorToken) return;
     try {
       const res = await fetch(`${this.apiBaseUrl}/api/auth/session`);
@@ -321,6 +330,9 @@ export class GameRuntimeClient {
     endpoint: string,
     body: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
+    if (this.isStageOnly) {
+      return { ok: false, error: 'Stage-only observer is strictly read-only' };
+    }
     await this.ensureToken();
     const res = await fetch(`${this.apiBaseUrl}${endpoint}`, {
       method: 'POST',

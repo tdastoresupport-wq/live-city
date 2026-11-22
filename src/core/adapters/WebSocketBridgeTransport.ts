@@ -7,6 +7,14 @@ import {
 export interface ValidateBridgeUrlOptions {
   allowLoopback?: boolean;
   allowedHosts?: string[];
+  dnsTimeoutMs?: number;
+}
+
+export interface DnsLookupResult {
+  ok: boolean;
+  addresses: string[];
+  error?: string;
+  timedOut?: boolean;
 }
 
 export function isIpv4(host: string): boolean {
@@ -19,87 +27,266 @@ export function isIpv4(host: string): boolean {
   });
 }
 
+/**
+ * Expands any valid IPv6 literal (including compressed '::' and IPv4-embedded suffixes)
+ * into its 8 canonical 16-bit integer groups. Returns null if malformed.
+ */
+export function expandIpv6ToGroups(raw: string): number[] | null {
+  let ip = raw.trim().toLowerCase();
+  if (ip.startsWith('[') && ip.endsWith(']')) {
+    ip = ip.slice(1, -1);
+  }
+  if (!ip || !ip.includes(':') || ip.includes('%')) {
+    return null;
+  }
+
+  // Handle embedded IPv4 suffix (e.g. ::ffff:169.254.169.254 or 64:ff9b::10.0.0.1)
+  const lastColon = ip.lastIndexOf(':');
+  const tail = ip.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    if (!isIpv4(tail)) return null;
+    const octets = tail.split('.').map(Number);
+    const high = ((octets[0] << 8) | octets[1]).toString(16);
+    const low = ((octets[2] << 8) | octets[3]).toString(16);
+    ip = `${ip.slice(0, lastColon + 1)}${high}:${low}`;
+  }
+
+  const doubleColonParts = ip.split('::');
+  if (doubleColonParts.length > 2) {
+    return null;
+  }
+
+  let groupStrings: string[];
+  if (doubleColonParts.length === 2) {
+    const left = doubleColonParts[0] ? doubleColonParts[0].split(':') : [];
+    const right = doubleColonParts[1] ? doubleColonParts[1].split(':') : [];
+    const missing = 8 - (left.length + right.length);
+    if (missing < 1) return null;
+    groupStrings = [...left, ...Array<string>(missing).fill('0'), ...right];
+  } else {
+    groupStrings = ip.split(':');
+    if (groupStrings.length !== 8) return null;
+  }
+
+  const groups: number[] = [];
+  for (const part of groupStrings) {
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+    groups.push(parseInt(part, 16));
+  }
+  return groups;
+}
+
+export function isIpv6(host: string): boolean {
+  return expandIpv6ToGroups(host) !== null;
+}
+
 export function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (h === 'localhost') return true;
-  if (h.startsWith('127.')) return true;
-  if (h === '::1' || h === '[::1]') return true;
-  if (
-    h === '::ffff:127.0.0.1' ||
-    h === '[::ffff:127.0.0.1]' ||
-    h === '[::ffff:7f00:1]' ||
-    h === '::ffff:7f00:1'
-  ) {
-    return true;
+  const h = hostname.trim().toLowerCase();
+  if (h === 'localhost' || h === '127.0.0.1') return true;
+  const groups = expandIpv6ToGroups(h);
+  if (groups) {
+    // Only explicit IPv6 loopback ::1 (reject IPv4-mapped ::ffff:127.0.0.1 bypasses)
+    const isV6Loopback =
+      groups[0] === 0 &&
+      groups[1] === 0 &&
+      groups[2] === 0 &&
+      groups[3] === 0 &&
+      groups[4] === 0 &&
+      groups[5] === 0 &&
+      groups[6] === 0 &&
+      groups[7] === 1;
+    if (isV6Loopback) return true;
   }
   return false;
 }
 
 export function isForbiddenPrivateOrMetadataIpv4(ip: string): boolean {
+  if (!isIpv4(ip)) return true;
   const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
   const [a, b, c] = parts;
   if (a === 0) return true; // 0.0.0.0/8
   if (a === 10) return true; // 10.0.0.0/8
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10
-  if (a === 127) return true; // 127.0.0.0/8
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (CGNAT)
+  if (a === 127) return true; // 127.0.0.0/8 (loopback)
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local & cloud metadata)
   if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
   if (a === 192 && b === 168) return true; // 192.168.0.0/16
-  if (a === 192 && b === 0 && c === 2) return true; // 192.0.2.0/24
-  if (a === 198 && b === 51 && c === 100) return true; // 198.51.100.0/24
-  if (a === 203 && b === 0 && c === 113) return true; // 203.0.113.0/24
+  if (a === 192 && b === 0 && c === 0) return true; // 192.0.0.0/24 (IETF protocol assignments)
+  if (a === 192 && b === 0 && c === 2) return true; // 192.0.2.0/24 (TEST-NET-1)
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 (benchmarking)
+  if (a === 198 && b === 51 && c === 100) return true; // 198.51.100.0/24 (TEST-NET-2)
+  if (a === 203 && b === 0 && c === 113) return true; // 203.0.113.0/24 (TEST-NET-3)
   if (a >= 224) return true; // 224.0.0.0/4 (multicast & reserved)
   return false;
 }
 
 export function isForbiddenPrivateOrMetadataIpv6(raw: string): boolean {
-  let ip = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
-  ip = ip.toLowerCase();
-  if (ip === '::1' || ip === '::') return true;
-  if (/^fe[89ab]/i.test(ip)) return true; // link-local fe80::/10
-  if (/^f[cd]/i.test(ip)) return true; // unique local fc00::/7
-  if (/^ff/i.test(ip)) return true; // multicast ff00::/8
-  if (ip.startsWith('::ffff:')) {
-    const sub = ip.slice(7);
-    if (sub.includes('.')) {
-      return isForbiddenPrivateOrMetadataIpv4(sub);
-    }
-    const hexParts = sub.split(':');
-    if (hexParts.length === 2) {
-      const p1 = parseInt(hexParts[0], 16);
-      const p2 = parseInt(hexParts[1], 16);
-      if (!isNaN(p1) && !isNaN(p2)) {
-        const b1 = (p1 >> 8) & 0xff;
-        const b2 = p1 & 0xff;
-        const b3 = (p2 >> 8) & 0xff;
-        const b4 = p2 & 0xff;
-        return isForbiddenPrivateOrMetadataIpv4(`${b1}.${b2}.${b3}.${b4}`);
-      }
-    }
+  const groups = expandIpv6ToGroups(raw);
+  if (!groups) return true; // Fail closed on malformed IPv6
+
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups;
+
+  const toEmbeddedIpv4 = (hi: number, lo: number): string =>
+    `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+
+  // Unspecified :: and loopback ::1
+  const allZeroPrefix6 = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0;
+  if (allZeroPrefix6 && g6 === 0 && (g7 === 0 || g7 === 1)) return true;
+
+  // Deprecated IPv4-compatible ::/96 (e.g. ::127.0.0.1, ::169.254.169.254)
+  if (allZeroPrefix6) {
+    return isForbiddenPrivateOrMetadataIpv4(toEmbeddedIpv4(g6, g7));
+  }
+
+  // IPv4-mapped ::ffff:0:0/96 (e.g. ::ffff:169.254.169.254, ::ffff:a9fe:a9fe, ::ffff:127.0.0.1)
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
+    return isForbiddenPrivateOrMetadataIpv4(toEmbeddedIpv4(g6, g7));
+  }
+
+  // IPv4-translated ::ffff:0:0:0/96
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0xffff && g5 === 0) {
+    return isForbiddenPrivateOrMetadataIpv4(toEmbeddedIpv4(g6, g7));
+  }
+
+  // NAT64 local prefix 64:ff9b:1::/48
+  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0x0001) return true;
+
+  // NAT64 well-known prefix 64:ff9b::/96
+  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
+    return isForbiddenPrivateOrMetadataIpv4(toEmbeddedIpv4(g6, g7));
+  }
+
+  // 6to4 tunneling 2002::/16 (embeds IPv4 in g1:g2)
+  if (g0 === 0x2002) {
+    return isForbiddenPrivateOrMetadataIpv4(toEmbeddedIpv4(g1, g2));
+  }
+
+  // Link-local fe80::/10 and deprecated site-local fec0::/10
+  if ((g0 & 0xffc0) === 0xfe80) return true;
+  if ((g0 & 0xffc0) === 0xfec0) return true;
+
+  // Unique local fc00::/7
+  if ((g0 & 0xfe00) === 0xfc00) return true;
+
+  // Multicast ff00::/8
+  if ((g0 & 0xff00) === 0xff00) return true;
+
+  // Discard-only 100::/64
+  if (g0 === 0x0100 && g1 === 0 && g2 === 0 && g3 === 0) return true;
+
+  // Documentation 2001:db8::/32, Teredo 2001:0::/32, Benchmarking 2001:2::/48
+  if (g0 === 0x2001 && (g1 === 0x0db8 || g1 === 0x0000 || (g1 === 0x0002 && g2 === 0))) {
     return true;
   }
+
   return false;
 }
 
 /**
- * Resolves DNS hostname dynamically in Node environment to detect private/loopback rebinding.
+ * Canonicalizes an allowlist host entry (domain, IPv4, or IPv6) to match URL.hostname format.
  */
-export async function resolveDnsHostnames(hostname: string): Promise<string[]> {
-  if (typeof process === 'undefined' || !process.versions?.node) {
-    return [];
+export function canonicalizeAllowedHost(entry: string): string {
+  const trimmed = String(entry || '').trim().toLowerCase();
+  if (!trimmed || trimmed.includes('://') || trimmed.includes('/') || trimmed.includes('*')) {
+    return '';
   }
+  const candidate =
+    trimmed.includes(':') && !trimmed.startsWith('[') ? `[${trimmed}]` : trimmed;
   try {
-    const dns = await import('node:dns');
-    const records = await dns.promises.lookup(hostname, { all: true });
-    return records.map((r) => r.address);
+    const parsed = new URL(`ws://${candidate}`);
+    if (parsed.port || parsed.username || parsed.password) {
+      return '';
+    }
+    return parsed.hostname.toLowerCase();
   } catch {
-    return [];
+    return '';
   }
 }
 
 /**
- * Synchronous URL and address structure validator.
+ * Normalizes a channel identifier for strict subscription ACK matching.
+ * Strips at most one leading '@' after trimming. Rejects empty, '@@', or malformed tokens.
+ */
+export function normalizeChannelId(raw: unknown): string {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return '';
+  const trimmed = String(raw).trim();
+  if (!trimmed) return '';
+  const withoutAt = trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+  if (!withoutAt || withoutAt.startsWith('@') || /[\s/?#@]/.test(withoutAt)) {
+    return '';
+  }
+  return withoutAt.toLowerCase();
+}
+
+/**
+ * Resolves DNS hostname in Node environment with an explicit timeout.
+ * Fails closed: distinguishes lookup success, empty results, timeout, and errors.
+ */
+export async function resolveDnsHostnames(
+  hostname: string,
+  timeoutMs = 3000
+): Promise<DnsLookupResult> {
+  if (typeof process === 'undefined' || !process.versions?.node) {
+    return {
+      ok: false,
+      addresses: [],
+      error: `DNS verification is unavailable in current runtime for remote host "${hostname}".`,
+    };
+  }
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const dns = await import('node:dns');
+    const lookupPromise = dns.promises.lookup(hostname, { all: true });
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`DNS lookup timed out after ${timeoutMs}ms`);
+        (err as { code?: string }).code = 'ETIMEDOUT';
+        reject(err);
+      }, timeoutMs);
+    });
+
+    const records = await Promise.race([lookupPromise, timeoutPromise]);
+    if (!Array.isArray(records) || records.length === 0) {
+      return {
+        ok: false,
+        addresses: [],
+        error: `DNS lookup returned no address records for "${hostname}".`,
+      };
+    }
+
+    const addresses = records
+      .map((r) => (r && typeof r.address === 'string' ? r.address.trim() : ''))
+      .filter((a) => a.length > 0);
+
+    if (addresses.length === 0) {
+      return {
+        ok: false,
+        addresses: [],
+        error: `DNS lookup returned empty addresses for "${hostname}".`,
+      };
+    }
+
+    return { ok: true, addresses };
+  } catch (err) {
+    const isTimeout =
+      err instanceof Error && ((err as { code?: string }).code === 'ETIMEDOUT' || err.message.includes('timed out'));
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      addresses: [],
+      timedOut: isTimeout,
+      error: `DNS lookup failed for "${hostname}": ${reason}`,
+    };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Synchronous URL, scheme, IP range, and host allowlist validator.
  */
 export function validateBridgeUrl(
   urlStr: string,
@@ -163,7 +350,7 @@ export function validateBridgeUrl(
     return { valid: false, error: 'Target host is blocked for security reasons.' };
   }
 
-  // Local loopback policy
+  // Local loopback policy (preserves standard local bridge 127.0.0.1 / localhost / [::1])
   if (isLoopbackHost(hostname)) {
     if (options?.allowLoopback === false) {
       return { valid: false, error: 'Loopback bridge address is not permitted by policy.' };
@@ -171,7 +358,7 @@ export function validateBridgeUrl(
     return { valid: true, normalized: parsed.toString() };
   }
 
-  // Non-loopback targets: check raw IPv4
+  // Non-loopback targets: classify raw IPv4, raw IPv6, or domain name
   if (isIpv4(hostname)) {
     if (isForbiddenPrivateOrMetadataIpv4(hostname)) {
       return {
@@ -180,7 +367,6 @@ export function validateBridgeUrl(
       };
     }
   } else if (hostname.startsWith('[') || hostname.includes(':')) {
-    // Non-loopback raw IPv6
     if (isForbiddenPrivateOrMetadataIpv6(hostname)) {
       return {
         valid: false,
@@ -192,23 +378,27 @@ export function validateBridgeUrl(
     if (
       hostname.endsWith('.internal') ||
       hostname.endsWith('.local') ||
-      hostname.endsWith('.localhost')
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.lan') ||
+      hostname.endsWith('.home.arpa')
     ) {
       return {
         valid: false,
         error: 'Internal domain names are blocked for security reasons.',
       };
     }
+  }
 
-    // Remote host allowlist check if configured
-    if (options?.allowedHosts && options.allowedHosts.length > 0) {
-      const allowed = options.allowedHosts.map((h) => h.toLowerCase());
-      if (!allowed.includes(hostname)) {
-        return {
-          valid: false,
-          error: `Target host "${hostname}" is not in allowed bridge hosts list.`,
-        };
-      }
+  // Remote host allowlist check applies to ALL non-loopback targets (domains AND IP literals)
+  if (options?.allowedHosts && options.allowedHosts.length > 0) {
+    const allowedSet = new Set(
+      options.allowedHosts.map(canonicalizeAllowedHost).filter((h) => h.length > 0)
+    );
+    if (!allowedSet.has(hostname)) {
+      return {
+        valid: false,
+        error: `Target host "${hostname}" is not in allowed bridge hosts list.`,
+      };
     }
   }
 
@@ -216,7 +406,13 @@ export function validateBridgeUrl(
 }
 
 /**
- * Asynchronous validator with DNS pre-flight check to mitigate SSRF & DNS rebinding.
+ * Asynchronous fail-closed validator with DNS pre-flight check.
+ *
+ * SECURITY LIMITATION NOTE:
+ * Because Node's built-in globalThis.WebSocket resolves the hostname internally upon TCP connect,
+ * DNS pre-flight alone cannot fully eliminate DNS rebinding/TOCTOU windows for untrusted domains.
+ * Use allowedBridgeHosts (LIVE_CITY_ALLOWED_BRIDGE_HOSTS) and OS/container egress firewall rules
+ * as defense-in-depth for remote bridge deployments.
  */
 export async function validateBridgeUrlAsync(
   urlStr: string,
@@ -231,30 +427,50 @@ export async function validateBridgeUrlAsync(
     return syncResult;
   }
 
+  let parsed: URL;
   try {
-    const parsed = new URL(syncResult.normalized);
-    const hostname = parsed.hostname.toLowerCase();
-
-    // If not a raw IP and not localhost loopback, check resolved DNS addresses
-    if (!isIpv4(hostname) && !hostname.startsWith('[') && hostname !== 'localhost') {
-      const resolvedAddresses = await resolveDnsHostnames(hostname);
-      for (const addr of resolvedAddresses) {
-        if (isIpv4(addr) && (isForbiddenPrivateOrMetadataIpv4(addr) || addr.startsWith('127.'))) {
-          return {
-            valid: false,
-            error: `Target domain "${hostname}" resolves to forbidden IP address: ${addr}`,
-          };
-        }
-        if (isForbiddenPrivateOrMetadataIpv6(addr) || addr === '::1') {
-          return {
-            valid: false,
-            error: `Target domain "${hostname}" resolves to forbidden IPv6 address: ${addr}`,
-          };
-        }
-      }
-    }
+    parsed = new URL(syncResult.normalized);
   } catch {
-    // If URL parsing fails in async phase, syncResult already caught it
+    return { valid: false, error: `Invalid bridge URL format: "${urlStr}".` };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Local loopback is already verified by policy; raw IPv4/IPv6 literals do not require DNS lookup
+  if (isLoopbackHost(hostname) || isIpv4(hostname) || hostname.startsWith('[') || hostname.includes(':')) {
+    return syncResult;
+  }
+
+  // Fail-closed DNS pre-flight lookup for remote hostnames
+  const dnsResult = await resolveDnsHostnames(hostname, options?.dnsTimeoutMs ?? 3000);
+  if (!dnsResult.ok || dnsResult.addresses.length === 0) {
+    return {
+      valid: false,
+      error: dnsResult.error || `Unable to resolve bridge hostname "${hostname}".`,
+    };
+  }
+
+  for (const addr of dnsResult.addresses) {
+    if (isIpv4(addr)) {
+      if (isForbiddenPrivateOrMetadataIpv4(addr)) {
+        return {
+          valid: false,
+          error: `Target domain "${hostname}" resolves to forbidden IPv4 address: ${addr}`,
+        };
+      }
+    } else if (isIpv6(addr)) {
+      if (isForbiddenPrivateOrMetadataIpv6(addr)) {
+        return {
+          valid: false,
+          error: `Target domain "${hostname}" resolves to forbidden IPv6 address: ${addr}`,
+        };
+      }
+    } else {
+      return {
+        valid: false,
+        error: `Target domain "${hostname}" resolved to unrecognized IP address: ${addr}`,
+      };
+    }
   }
 
   return syncResult;
@@ -307,10 +523,11 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
     this.isSubscribed = false;
     this.activeChannelId = String(channelId || '').trim();
 
-    // 3. Validate bridge URL
+    // 3. Validate bridge URL (fail-closed async DNS pre-flight + IP/allowlist checks)
     const validation = await validateBridgeUrlAsync(bridgeUrl, {
       allowLoopback: options?.allowLoopback ?? true,
       allowedHosts: options?.allowedHosts,
+      dnsTimeoutMs: options?.dnsTimeoutMs,
     });
     if (!validation.valid || !validation.normalized) {
       throw new Error(validation.error || 'Invalid bridge URL');
@@ -328,8 +545,10 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      let resolvedSuccessfully = false;
       let connectTimer: ReturnType<typeof setTimeout> | null = null;
       let ackTimer: ReturnType<typeof setTimeout> | null = null;
+      let activeSocket: WebSocket | null = null;
 
       const clearAllTimers = () => {
         if (connectTimer) {
@@ -342,9 +561,31 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
         }
       };
 
+      const detachAndCloseFailedSocket = () => {
+        if (activeSocket) {
+          const s = activeSocket;
+          activeSocket = null;
+          if (this.ws === s) {
+            this.ws = null;
+          }
+          try {
+            s.onopen = null;
+            s.onmessage = null;
+            s.onerror = null;
+            s.onclose = null;
+            s.close();
+          } catch {
+            // ignore
+          }
+        }
+        this.isConnected = false;
+        this.isSubscribed = false;
+      };
+
       const safeResolve = () => {
         if (!settled && this.connectionGen === currentGen) {
           settled = true;
+          resolvedSuccessfully = true;
           clearAllTimers();
           resolve();
         }
@@ -354,22 +595,19 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
         if (!settled && this.connectionGen === currentGen) {
           settled = true;
           clearAllTimers();
+          detachAndCloseFailedSocket();
           reject(err);
         }
       };
 
       try {
         const socket = new globalThis.WebSocket(this.activeBridgeUrl);
+        activeSocket = socket;
         this.ws = socket;
 
         // Overall connect timeout
         connectTimer = setTimeout(() => {
           if (!settled && this.connectionGen === currentGen) {
-            try {
-              socket.close();
-            } catch {
-              // ignore
-            }
             safeReject(
               new Error(`WebSocket bridge connection timed out at ${this.activeBridgeUrl}`)
             );
@@ -400,21 +638,16 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
           }
 
           if (requireAck) {
-            // Require explicit ACK or incoming event from the bridge
+            // Strict mode: require explicit positive subscription ACK matching channelId
             ackTimer = setTimeout(() => {
               if (!settled && this.connectionGen === currentGen) {
-                try {
-                  socket.close();
-                } catch {
-                  // ignore
-                }
                 safeReject(
                   new Error('Bridge handshake acknowledgement timed out: subscribe unverified')
                 );
               }
             }, ackTimeoutMs);
           } else {
-            // Non-strict mode: give 300ms window for immediate error frame, else resolve
+            // Non-strict mode: give 300ms window for immediate ACK or error frame, else resolve unverified
             ackTimer = setTimeout(() => {
               safeResolve();
             }, 300);
@@ -434,40 +667,47 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
             const parsed = JSON.parse(text);
 
             // 1. Evaluate control frames strictly
-            const ctrl = this.evaluateControlFrame(parsed);
+            const ctrl = this.evaluateControlFrame(parsed, requireAck);
             if (ctrl.isControl) {
               if (ctrl.isError) {
                 const errMsg = ctrl.errorReason || 'Bridge returned error response';
                 if (!settled) {
-                  try {
-                    socket.close();
-                  } catch {
-                    // ignore
-                  }
                   safeReject(new Error(errMsg));
-                  return;
                 }
-              } else if (ctrl.isPositiveAck) {
+                return;
+              }
+              if (ctrl.isPositiveAck) {
                 this.isSubscribed = true;
                 safeResolve();
                 return;
-              } else if (ctrl.isSocketConnectedOnly) {
+              }
+              if (ctrl.isSocketConnectedOnly) {
                 this.isConnected = true;
-                if (!requireAck) {
-                  setTimeout(() => {
+                if (!requireAck && !settled) {
+                  if (ackTimer) {
+                    clearTimeout(ackTimer);
+                  }
+                  ackTimer = setTimeout(() => {
                     safeResolve();
                   }, 100);
                 }
                 return;
               }
+              // Non-verifying control frame (e.g. generic ok/success or non-strict ACK missing channel)
+              return;
             }
 
-            // 3. Normal stream payload
+            // 2. Normal stream payload (comment / gift / like)
             const normalized = this.normalizePayload(parsed);
             if (normalized) {
-              // Receiving live events confirms active subscription
-              this.isSubscribed = true;
-              safeResolve();
+              // In strict mode, normal stream payloads NEVER substitute for positive subscription ACK
+              if (requireAck && !this.isSubscribed) {
+                return;
+              }
+
+              if (!settled) {
+                safeResolve();
+              }
 
               for (const cb of this.messageCallbacks) {
                 cb(normalized);
@@ -497,13 +737,11 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
                 `WebSocket bridge closed before connection established (code ${event.code})`
               )
             );
-          } else {
-            // Emit unexpected disconnect only if not manually disconnected
-            if (!this.isManualDisconnect) {
-              const reason = event.reason || `Bridge disconnected (code ${event.code})`;
-              for (const cb of this.closeCallbacks) {
-                cb(reason);
-              }
+          } else if (resolvedSuccessfully && !this.isManualDisconnect) {
+            // Emit unexpected disconnect ONLY for previously established connections
+            const reason = event.reason || `Bridge disconnected (code ${event.code})`;
+            for (const cb of this.closeCallbacks) {
+              cb(reason);
             }
           }
         };
@@ -534,7 +772,10 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
     }
   }
 
-  private evaluateControlFrame(parsed: any): {
+  private evaluateControlFrame(
+    parsed: any,
+    requireAck: boolean
+  ): {
     isControl: boolean;
     isError: boolean;
     isPositiveAck: boolean;
@@ -542,21 +783,23 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
     errorReason?: string;
   } {
     if (!parsed || typeof parsed !== 'object') {
-      return { isControl: false, isError: false, isPositiveAck: false, isSocketConnectedOnly: false };
+      return {
+        isControl: false,
+        isError: false,
+        isPositiveAck: false,
+        isSocketConnectedOnly: false,
+      };
     }
 
-    const norm = (val: unknown): string =>
-      String(val || '')
-        .replace(/^@/, '')
-        .toLowerCase()
-        .trim();
+    const statusLower = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : '';
 
     // A. Check for error frames or error status
     const isError =
-      parsed.status === 'error' ||
+      statusLower === 'error' ||
       parsed.event === 'error' ||
       parsed.type === 'error' ||
-      (parsed.action === 'ack' && parsed.status === 'error') ||
+      parsed.ok === false ||
+      (parsed.action === 'ack' && statusLower === 'error') ||
       Boolean(parsed.error && typeof parsed.error === 'string');
 
     if (isError) {
@@ -574,15 +817,14 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
       };
     }
 
-    // B. Check for subscription ACK candidate
+    // B. Strict positive subscription ACK schema check
     const isAckCandidate =
-      (parsed.action === 'ack' &&
-        ['subscribed', 'ok', 'success'].includes(String(parsed.status || '').toLowerCase())) ||
+      (parsed.action === 'ack' && statusLower === 'subscribed') ||
+      (parsed.type === 'ack' && statusLower === 'subscribed') ||
       parsed.action === 'subscribed' ||
-      (parsed.type === 'ack' &&
-        ['subscribed', 'ok', 'success'].includes(String(parsed.status || '').toLowerCase())) ||
       parsed.event === 'subscribed' ||
-      parsed.status === 'subscribed';
+      parsed.type === 'subscribed' ||
+      statusLower === 'subscribed';
 
     if (isAckCandidate) {
       const channelInFrame =
@@ -590,21 +832,46 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
         parsed.channel ??
         parsed.uniqueId ??
         parsed.data?.channelId ??
-        parsed.data?.uniqueId;
+        parsed.data?.uniqueId ??
+        parsed.data?.channel;
 
-      if (channelInFrame) {
-        const expectedNorm = norm(this.activeChannelId);
-        const receivedNorm = norm(channelInFrame);
-        if (expectedNorm && receivedNorm && expectedNorm !== receivedNorm) {
+      const expectedNorm = normalizeChannelId(this.activeChannelId);
+      const hasRawChannel = channelInFrame !== undefined && channelInFrame !== null;
+      const receivedNorm = normalizeChannelId(channelInFrame);
+
+      // Missing or malformed channel identifier must NEVER become positive ACK
+      if (!hasRawChannel || !receivedNorm) {
+        const isExplicitlyMalformed = hasRawChannel && String(channelInFrame).trim().length > 0;
+        if (requireAck || isExplicitlyMalformed) {
           return {
             isControl: true,
             isError: true,
             isPositiveAck: false,
             isSocketConnectedOnly: false,
-            errorReason: `Subscription ACK channel mismatch: expected "${this.activeChannelId}", got "${channelInFrame}"`,
+            errorReason: hasRawChannel
+              ? `Subscription ACK contains invalid channel identifier: "${String(channelInFrame)}"`
+              : 'Subscription ACK missing required channel identifier',
           };
         }
+        return {
+          isControl: true,
+          isError: false,
+          isPositiveAck: false,
+          isSocketConnectedOnly: false,
+        };
       }
+
+      // Channel must match active channel strictly after normalization
+      if (!expectedNorm || receivedNorm !== expectedNorm) {
+        return {
+          isControl: true,
+          isError: true,
+          isPositiveAck: false,
+          isSocketConnectedOnly: false,
+          errorReason: `Subscription ACK channel mismatch: expected "${this.activeChannelId}", got "${String(channelInFrame)}"`,
+        };
+      }
+
       return {
         isControl: true,
         isError: false,
@@ -613,11 +880,11 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
       };
     }
 
-    // C. Check for generic connected frames (transport level only)
+    // C. Generic connected frames (transport level only — never verifies subscription)
     const isGenericConnected =
       parsed.type === 'connected' ||
       parsed.event === 'connected' ||
-      (parsed.status === 'connected' && parsed.action !== 'ack');
+      (statusLower === 'connected' && parsed.action !== 'ack');
 
     if (isGenericConnected) {
       return {
@@ -625,6 +892,22 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
         isError: false,
         isPositiveAck: false,
         isSocketConnectedOnly: true,
+      };
+    }
+
+    // D. Generic ok/success/bare ack frames (do not mark subscription verified)
+    const isGenericNonVerifyingAck =
+      parsed.action === 'ack' ||
+      parsed.type === 'ack' ||
+      statusLower === 'ok' ||
+      statusLower === 'success';
+
+    if (isGenericNonVerifyingAck) {
+      return {
+        isControl: true,
+        isError: false,
+        isPositiveAck: false,
+        isSocketConnectedOnly: false,
       };
     }
 
