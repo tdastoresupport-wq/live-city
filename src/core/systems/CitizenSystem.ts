@@ -21,6 +21,53 @@ export class CitizenSystem {
   }
 
   /**
+   * Computes citizen title from progression level.
+   */
+  public static getTitleForLevel(level: number): string {
+    if (level < 2) return 'Tân Binh';
+    if (level < 4) return 'Thợ Lành Nghề';
+    if (level < 7) return 'Kiến Trúc Sư';
+    if (level < 10) return 'Nguyên Soái';
+    return 'Huyền Thoại';
+  }
+
+  /**
+   * Grants XP to a citizen, computes level (capped at 20) and title, and triggers milestone checks on level-up.
+   */
+  public updateCitizenProgression(citizen: Citizen, xpGain: number): void {
+    if (!Number.isFinite(xpGain) || xpGain <= 0) return;
+    const prevLevel = citizen.level || 1;
+    const nextXp = Math.max(0, (citizen.xp || 0) + Math.round(xpGain));
+    const nextLevel = Math.min(20, 1 + Math.floor(nextXp / 100));
+    citizen.xp = nextXp;
+    citizen.level = nextLevel;
+    citizen.title = CitizenSystem.getTitleForLevel(nextLevel);
+
+    if (nextLevel > prevLevel) {
+      this.worldState.pushEvent(
+        'city_leveled_up',
+        `⭐ Cư dân ${citizen.userName} thăng cấp Lv.${nextLevel} (${citizen.title})!`,
+        citizen.userName
+      );
+      this.worldState.checkAndUnlockMilestones();
+    }
+  }
+
+  /**
+   * Cancels the citizen's current movement/action and queued task while strictly preserving carriedResource.
+   */
+  public cancelTask(citizen: Citizen): void {
+    citizen.state = 'idle';
+    citizen.path = [];
+    citizen.targetNodeId = undefined;
+    citizen.targetBuildingId = undefined;
+    citizen.queuedTask = undefined;
+    citizen.actionTimer = 0;
+    citizen.isResting = false;
+    this.worldState.notify();
+  }
+
+  /**
    * Returns count of currently active (non-resting) citizens.
    */
   public getActiveCitizensCount(): number {
@@ -101,6 +148,9 @@ export class CitizenSystem {
       joinedAt: now,
       lastActiveTime: now,
       isResting: false,
+      xp: 0,
+      level: 1,
+      title: 'Tân Binh',
       floatingText: {
         text: 'Vừa gia nhập!',
         color: '#34d399',
@@ -282,17 +332,61 @@ export class CitizenSystem {
     }
 
     const { width, height } = this.worldState.getGridDimensions();
-    const path = findPath(
-      citizen.x,
-      citizen.y,
-      activeProject.x,
-      activeProject.y,
-      this.worldState.tileMap,
-      width,
-      height
-    );
+    const candidates: Array<{ x: number; y: number }> = [];
+    const seen = new Set<string>();
 
-    if (path.length === 0) {
+    const addCandidate = (cx: number, cy: number) => {
+      if (cx < 0 || cx >= width || cy < 0 || cy >= height) return;
+      const key = `${cx},${cy}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const tile = this.worldState.tileMap.get(key);
+      if (tile && tile.walkable) {
+        candidates.push({ x: cx, y: cy });
+      }
+    };
+
+    // Prioritize top-left anchor first for backward compatibility, then footprint & perimeter tiles
+    addCandidate(activeProject.x, activeProject.y);
+    for (let py = activeProject.y; py < activeProject.y + activeProject.height; py++) {
+      for (let px = activeProject.x; px < activeProject.x + activeProject.width; px++) {
+        addCandidate(px, py);
+      }
+    }
+    for (let py = activeProject.y - 1; py <= activeProject.y + activeProject.height; py++) {
+      for (let px = activeProject.x - 1; px <= activeProject.x + activeProject.width; px++) {
+        addCandidate(px, py);
+      }
+    }
+
+    let bestTarget: { x: number; y: number } | null = null;
+    let bestPath: Array<{ x: number; y: number }> = [];
+
+    for (const candidate of candidates) {
+      if (Math.round(citizen.x) === candidate.x && Math.round(citizen.y) === candidate.y) {
+        bestTarget = candidate;
+        bestPath = [{ x: candidate.x, y: candidate.y }];
+        break;
+      }
+      const candidatePath = findPath(
+        citizen.x,
+        citizen.y,
+        candidate.x,
+        candidate.y,
+        this.worldState.tileMap,
+        width,
+        height
+      );
+      if (candidatePath.length > 0 && (bestPath.length === 0 || candidatePath.length < bestPath.length)) {
+        bestPath = candidatePath;
+        bestTarget = candidate;
+        if (candidate.x === activeProject.x && candidate.y === activeProject.y) {
+          break;
+        }
+      }
+    }
+
+    if (!bestTarget || bestPath.length === 0) {
       citizen.state = 'idle';
       citizen.path = [];
       citizen.targetBuildingId = undefined;
@@ -306,9 +400,9 @@ export class CitizenSystem {
 
     citizen.targetBuildingId = activeProject.id;
     citizen.targetNodeId = undefined;
-    citizen.targetX = activeProject.x;
-    citizen.targetY = activeProject.y;
-    citizen.path = path;
+    citizen.targetX = bestTarget.x;
+    citizen.targetY = bestTarget.y;
+    citizen.path = bestPath;
     citizen.state = 'moving_to_build';
     citizen.actionTimer = 0;
     citizen.floatingText = {
@@ -477,18 +571,19 @@ export class CitizenSystem {
         }
       }
 
-      // Check mid-flight invalidations before moving
-      if (citizen.state === 'moving_to_build') {
+      // Check mid-flight & mid-action invalidations before stepping/updating
+      if (citizen.state === 'moving_to_build' || citizen.state === 'building') {
         const bld = citizen.targetBuildingId
           ? this.worldState.buildings.get(citizen.targetBuildingId)
           : undefined;
         if (!bld || bld.status !== 'constructing') {
-          // Target project finished while citizen was walking!
+          // Target project finished or invalidated while citizen was walking/building!
           const nextActive = this.worldState.getActiveUnderConstruction();
           if (nextActive) {
             this.assignBuild(citizen, true);
           } else {
             citizen.path = [];
+            citizen.actionTimer = 0;
             citizen.targetBuildingId = undefined;
             citizen.state = 'idle';
             citizen.floatingText = {
@@ -501,18 +596,21 @@ export class CitizenSystem {
           }
           continue;
         }
-      } else if (citizen.state === 'moving_to_harvest') {
+      } else if (citizen.state === 'moving_to_harvest' || citizen.state === 'harvesting') {
         const node = citizen.targetNodeId
           ? this.worldState.resourceNodes.get(citizen.targetNodeId)
           : undefined;
         if (!node || node.depleted || node.currentAmount <= 0) {
-          // Node depleted mid-walk -> retarget another node of same type
+          // Node depleted mid-walk or mid-harvest -> retarget another node of same type
           const fallbackType = node?.resourceType || 'wood';
+          citizen.actionTimer = 0;
           const reassigned = this.assignHarvest(citizen, fallbackType, true);
           if (!reassigned) {
             citizen.path = [];
             citizen.targetNodeId = undefined;
             citizen.state = 'idle';
+            this.executeQueuedTaskIfAny(citizen);
+            this.worldState.notify();
           }
           continue;
         }
@@ -672,6 +770,7 @@ export class CitizenSystem {
               color: '#10b981',
               timer: 2.0,
             };
+            this.updateCitizenProgression(citizen, Math.max(10, amount));
           });
 
           // Immediately execute queued task if viewer sent a command while carrying
@@ -722,6 +821,7 @@ export class CitizenSystem {
             );
 
             citizen.stats.buildingsContributed += buildPoints;
+            this.updateCitizenProgression(citizen, result?.completed ? 25 : 10);
 
             if (result && result.completed) {
               this.audioSystem?.playCompleteSound();
@@ -764,6 +864,7 @@ export class CitizenSystem {
           citizen.stats.explorationPoints += 10 + newlyDiscoveredTiles;
           const expGain = newlyDiscoveredTiles > 0 ? 15 + newlyDiscoveredTiles : 10;
           this.worldState.addCityExp(expGain);
+          this.updateCitizenProgression(citizen, expGain);
 
           // Small bounded gold reward if discovering new tiles/nodes
           if (newlyDiscoveredNodes.length > 0 || newlyDiscoveredTiles >= 3) {

@@ -145,9 +145,8 @@ export class GameEngine {
     const savedSnapshot = await this.persistence.load<WorldSnapshot | null>('world_save', null);
     if (savedSnapshot) {
       const loaded = this.worldState.loadSnapshot(savedSnapshot);
-      if (!loaded && 'loadBackup' in this.persistence) {
-        const backupLoader = this.persistence as LocalStoragePersistence;
-        const backupSnapshot = await backupLoader.loadBackup<WorldSnapshot | null>(
+      if (!loaded && typeof this.persistence.loadBackup === 'function') {
+        const backupSnapshot = await this.persistence.loadBackup<WorldSnapshot | null>(
           'world_save',
           null
         );

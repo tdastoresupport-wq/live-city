@@ -121,6 +121,9 @@ export interface Citizen {
   speed: number; // tiles per second
   actionTimer: number; // timer in seconds
   stats: CitizenStats;
+  xp?: number;
+  level?: number;
+  title?: string;
   joinedAt?: number;
   lastActiveTime: number;
   isResting?: boolean;
@@ -129,6 +132,15 @@ export interface Citizen {
     color: string;
     timer: number;
   };
+}
+
+export interface CityMilestone {
+  id: string;
+  title: string;
+  description: string;
+  unlockedAt: number;
+  rewardGold?: number;
+  rewardExp?: number;
 }
 
 export interface CityResources {

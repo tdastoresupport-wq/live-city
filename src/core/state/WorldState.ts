@@ -2,9 +2,11 @@ import type {
   WorldTile,
   ResourceNode,
   Building,
+  BuildingType,
   Citizen,
   CityResources,
   CityStats,
+  CityMilestone,
   GameEvent,
   GameEventType,
   BuildingBlueprint,
@@ -38,6 +40,8 @@ export interface WorldSnapshot {
   activeVote?: VotingSession | null;
   voteHistory?: VotingSession[];
   activeEvent?: CityActiveEvent | null;
+  milestones?: CityMilestone[];
+  pendingVotedProject?: BuildingType | null;
   eventLog?: GameEvent[];
 }
 
@@ -64,11 +68,15 @@ export class WorldState {
   public activeVote: VotingSession | null = null;
   public voteHistory: VotingSession[] = [];
   public activeEvent: CityActiveEvent | null = null;
+  public milestones: CityMilestone[] = [];
+  public pendingVotedProject: BuildingType | null = null;
 
   private maxEventLogSize = 100;
   private listeners: Set<StateListener> = new Set();
   private batchDepth = 0;
   private isDirty = false;
+  private stateVersion = 0;
+  private cachedDiscoveredTiles: string[] | null = null;
 
   constructor() {
     this.tileMap = createInitialTileMap();
@@ -104,6 +112,9 @@ export class WorldState {
       this.activeVote = null;
       this.voteHistory = [];
       this.activeEvent = null;
+      this.milestones = [];
+      this.pendingVotedProject = null;
+      this.cachedDiscoveredTiles = null;
       this.eventLog = [];
 
       this.pushEvent(
@@ -111,6 +122,10 @@ export class WorldState {
         'Thành phố Live City đã khởi động. Sẵn sàng đón cư dân mới!'
       );
     });
+  }
+
+  public getStateVersion(): number {
+    return this.stateVersion;
   }
 
   // --- Controlled Observability, Batching & Subscriptions ---
@@ -144,6 +159,7 @@ export class WorldState {
 
   private flushNotifications(): void {
     this.isDirty = false;
+    this.stateVersion++;
     for (const listener of this.listeners) {
       try {
         listener();
@@ -236,16 +252,21 @@ export class WorldState {
     if (!Number.isFinite(amount) || amount <= 0) return;
 
     this.batch(() => {
+      let leveledUp = false;
       this.stats.exp += Math.round(amount);
       while (this.stats.exp >= this.stats.expToNextLevel) {
         this.stats.exp -= this.stats.expToNextLevel;
         this.stats.level += 1;
         this.stats.expToNextLevel = Math.round(this.stats.expToNextLevel * 1.5);
+        leveledUp = true;
 
         this.pushEvent(
           'city_leveled_up',
           `🎉 Chúc mừng! Live City vừa thăng cấp lên Cấp ${this.stats.level}!`
         );
+      }
+      if (leveledUp) {
+        this.checkAndUnlockMilestones();
       }
       this.notify();
     });
@@ -332,6 +353,10 @@ export class WorldState {
       }
 
       this.stats.exploredPercentage = this.calculateExploredPercentage();
+      if (newlyDiscoveredTiles > 0) {
+        this.cachedDiscoveredTiles = null;
+        this.checkAndUnlockMilestones();
+      }
       this.notify();
     });
 
@@ -349,7 +374,24 @@ export class WorldState {
       this.citizens.set(citizen.id, citizen);
       this.userCitizenMap.set(citizen.userId, citizen.id);
       this.stats.citizensCount = this.citizens.size;
+      this.checkAndUnlockMilestones();
       this.notify();
+    });
+  }
+
+  public removeCitizen(citizenIdOrUserId: string): boolean {
+    const byId = this.citizens.get(citizenIdOrUserId);
+    const citizen = byId ?? this.getCitizenByUserId(citizenIdOrUserId);
+    if (!citizen) return false;
+
+    return this.batch(() => {
+      this.citizens.delete(citizen.id);
+      if (this.userCitizenMap.get(citizen.userId) === citizen.id) {
+        this.userCitizenMap.delete(citizen.userId);
+      }
+      this.stats.citizensCount = this.citizens.size;
+      this.notify();
+      return true;
     });
   }
 
@@ -449,6 +491,7 @@ export class WorldState {
           { buildingId: building.id, buildingType: building.type }
         );
         this.addCityExp(50);
+        this.checkAndUnlockMilestones();
       } else {
         this.pushEvent(
           'building_progress',
@@ -464,6 +507,83 @@ export class WorldState {
         requiredProgress: building.requiredProgress,
       };
     });
+  }
+
+  public checkAndUnlockMilestones(): void {
+    const unlocked = new Set(this.milestones.map((m) => m.id));
+    const unlock = (
+      id: string,
+      title: string,
+      description: string,
+      rewardGold = 0,
+      rewardExp = 0
+    ) => {
+      if (unlocked.has(id)) return;
+      unlocked.add(id);
+      const milestone: CityMilestone = {
+        id,
+        title,
+        description,
+        unlockedAt: Date.now(),
+        rewardGold: rewardGold || undefined,
+        rewardExp: rewardExp || undefined,
+      };
+      this.milestones.push(milestone);
+      if (rewardGold > 0) this.addResource('gold', rewardGold);
+      if (rewardExp > 0) this.addCityExp(rewardExp);
+      this.pushEvent('city_leveled_up', `🏅 CỘT MỐC MỚI: [${title}] — ${description}`);
+    };
+
+    const completedProjectsCount = Array.from(this.buildings.values()).filter(
+      (b) => b.status === 'active' && b.id !== 'bld_town_hall' && b.id !== 'bld_storage_1'
+    ).length;
+
+    if (completedProjectsCount >= 1) {
+      unlock(
+        'first_building',
+        'Đặt Nền Móng Đầu Tiên',
+        'Hoàn thành công trình cộng đồng đầu tiên (+20 Vàng, +30 EXP).',
+        20,
+        30
+      );
+    }
+    if (this.stats.exploredPercentage >= 50) {
+      unlock(
+        'explorer_50',
+        'Nhà Thám Hiểm Biên Cương',
+        'Mở sáng 50% bản đồ vùng mù (+25 Vàng, +40 EXP).',
+        25,
+        40
+      );
+    }
+    if (this.stats.exploredPercentage >= 80) {
+      unlock(
+        'explorer_80',
+        'Làm Chủ Lãnh Thổ',
+        'Mở sáng 80% bản đồ Live City (+50 Vàng, +80 EXP).',
+        50,
+        80
+      );
+    }
+    if (this.stats.level >= 3) {
+      unlock(
+        'city_level_3',
+        'Đô Thị Phồn Vinh Cấp 3',
+        'Thành phố đạt Cấp độ 3 (+40 Vàng).',
+        40,
+        0
+      );
+    }
+    if (this.citizens.size >= 10) {
+      unlock(
+        'master_workforce',
+        'Cộng Đồng Sôi Động',
+        'Quy tụ từ 10 cư dân livestream trở lên (+20 Thực phẩm, +20 Vàng).',
+        20,
+        0
+      );
+      this.addResource('food', 20);
+    }
   }
 
   private applyCompletedBuildingBonuses(building: Building): void {
@@ -487,15 +607,29 @@ export class WorldState {
     }
   }
 
+  private cloneVoteSession(session: VotingSession): VotingSession {
+    return {
+      ...session,
+      options: session.options.map((o) => ({ ...o, cost: { ...o.cost } })),
+      voterChoices: { ...session.voterChoices },
+    };
+  }
+
+  private getDiscoveredTileKeys(): string[] {
+    if (!this.cachedDiscoveredTiles) {
+      const keys: string[] = [];
+      for (const [key, tile] of this.tileMap.entries()) {
+        if (tile.discovered !== false) {
+          keys.push(key);
+        }
+      }
+      this.cachedDiscoveredTiles = keys;
+    }
+    return [...this.cachedDiscoveredTiles];
+  }
+
   // --- Snapshot Serialization, Validation & Migration (v1 -> v2) ---
   public toSnapshot(): WorldSnapshot {
-    const discoveredTiles: string[] = [];
-    for (const [key, tile] of this.tileMap.entries()) {
-      if (tile.discovered !== false) {
-        discoveredTiles.push(key);
-      }
-    }
-
     return {
       version: 2,
       timestamp: Date.now(),
@@ -514,10 +648,14 @@ export class WorldState {
         contributions: { ...b.contributions },
       })),
       resourceNodes: Array.from(this.resourceNodes.values()).map((n) => ({ ...n })),
-      discoveredTiles,
-      activeVote: this.activeVote ? JSON.parse(JSON.stringify(this.activeVote)) : null,
-      voteHistory: JSON.parse(JSON.stringify(this.voteHistory)),
-      activeEvent: this.activeEvent ? JSON.parse(JSON.stringify(this.activeEvent)) : null,
+      discoveredTiles: this.getDiscoveredTileKeys(),
+      activeVote: this.activeVote ? this.cloneVoteSession(this.activeVote) : null,
+      voteHistory: this.voteHistory.map((v) => this.cloneVoteSession(v)),
+      activeEvent: this.activeEvent
+        ? { ...this.activeEvent, modifiers: { ...this.activeEvent.modifiers } }
+        : null,
+      milestones: this.milestones.map((m) => ({ ...m })),
+      pendingVotedProject: this.pendingVotedProject,
       eventLog: this.eventLog.slice(0, 30),
     };
   }
@@ -635,6 +773,9 @@ export class WorldState {
           for (const [key, tile] of this.tileMap.entries()) {
             tile.discovered = discoveredSet.has(key);
           }
+          this.cachedDiscoveredTiles = [...snapshot.discoveredTiles];
+        } else {
+          this.cachedDiscoveredTiles = null;
         }
 
         this.citizens.clear();
@@ -642,6 +783,9 @@ export class WorldState {
         for (const c of snapshot.citizens) {
           const citizenCopy: Citizen = {
             ...c,
+            xp: typeof c.xp === 'number' ? c.xp : 0,
+            level: typeof c.level === 'number' && c.level >= 1 ? c.level : 1,
+            title: typeof c.title === 'string' && c.title ? c.title : 'Tân Binh',
             path: Array.isArray(c.path) ? [...c.path] : [],
             stats: {
               woodHarvested: c.stats?.woodHarvested || 0,
@@ -659,12 +803,24 @@ export class WorldState {
         this.stats.citizensCount = this.citizens.size;
 
         this.buildings.clear();
+        let activeCapBonus = 0;
         for (const b of snapshot.buildings) {
-          this.buildings.set(b.id, {
+          const copy: Building = {
             ...b,
             contributions: { ...(b.contributions || {}) },
-          });
+          };
+          this.buildings.set(copy.id, copy);
+          if (copy.status === 'active') {
+            const bp = this.blueprints.find((item) => item.type === copy.type);
+            if (bp?.citizenCapBonus) {
+              activeCapBonus += bp.citizenCapBonus;
+            }
+          }
         }
+        this.stats.activeCitizensCap = Math.max(
+          40 + activeCapBonus,
+          snapshot.stats.activeCitizensCap || 40
+        );
 
         this.resourceNodes.clear();
         for (const n of snapshot.resourceNodes) {
@@ -681,6 +837,10 @@ export class WorldState {
         this.activeVote = snapshot.activeVote || null;
         this.voteHistory = Array.isArray(snapshot.voteHistory) ? snapshot.voteHistory : [];
         this.activeEvent = snapshot.activeEvent || null;
+        this.milestones = Array.isArray(snapshot.milestones)
+          ? snapshot.milestones.map((m) => ({ ...m }))
+          : [];
+        this.pendingVotedProject = snapshot.pendingVotedProject || null;
 
         if (Array.isArray(snapshot.eventLog) && snapshot.eventLog.length > 0) {
           this.eventLog = [...snapshot.eventLog];

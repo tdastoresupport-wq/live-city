@@ -117,6 +117,9 @@ export class BuildingSystem {
       };
 
       this.worldState.buildings.set(building.id, building);
+      if (this.worldState.pendingVotedProject === blueprint.type) {
+        this.worldState.pendingVotedProject = null;
+      }
       this.worldState.pushEvent(
         'building_started',
         `🏗️ Dự án xây dựng [${building.name}] vừa được khởi công tại (${coords.x}, ${coords.y})! Gõ XÂY để góp sức!`
@@ -245,14 +248,18 @@ export class BuildingSystem {
     return this.worldState.batch(() => {
       session.status = 'closed';
 
-      // Determine winning option
+      // Determine winning option with deterministic tie-breaking (lowest option.index wins ties)
       let winner: VotingOption = session.options[0];
       for (const opt of session.options) {
-        if (opt.votes > winner.votes) {
+        if (
+          opt.votes > winner.votes ||
+          (opt.votes === winner.votes && opt.index < winner.index)
+        ) {
           winner = opt;
         }
       }
 
+      const tiedCount = session.options.filter((o) => o.votes === winner.votes).length;
       session.winnerType = winner.type;
       this.worldState.voteHistory.unshift({
         ...session,
@@ -264,13 +271,29 @@ export class BuildingSystem {
       }
       this.worldState.activeVote = null;
 
+      const tieNote =
+        tiedCount > 1
+          ? ` (Hòa ${winner.votes} phiếu, chọn phương án #${winner.index} theo thứ tự ưu tiên)`
+          : '';
+
       this.worldState.pushEvent(
         'voting_update',
-        `🏆 Kết thúc bình chọn! Dự án chiến thắng: [${winner.name}] với ${winner.votes} phiếu bầu!`
+        `🏆 Kết thúc bình chọn! Dự án chiến thắng: [${winner.name}] với ${winner.votes} phiếu bầu${tieNote}!`
       );
 
-      if (autoStartWinner && !this.worldState.getActiveUnderConstruction()) {
-        this.startNewProject(winner.type);
+      if (autoStartWinner) {
+        const started = !this.worldState.getActiveUnderConstruction()
+          ? this.startNewProject(winner.type)
+          : null;
+        if (started) {
+          this.worldState.pendingVotedProject = null;
+        } else {
+          this.worldState.pendingVotedProject = winner.type;
+          this.worldState.pushEvent(
+            'voting_update',
+            `📋 Dự án [${winner.name}] đã được đưa vào hàng chờ khởi công tiếp theo.`
+          );
+        }
       }
 
       this.worldState.notify();
@@ -286,6 +309,28 @@ export class BuildingSystem {
       Date.now() >= this.worldState.activeVote.endsAt
     ) {
       this.closeVotingSession(true);
+    }
+
+    // Attempt queued voted project when construction slot is free and resources allow
+    if (this.worldState.pendingVotedProject && !this.worldState.getActiveUnderConstruction()) {
+      const queuedType = this.worldState.pendingVotedProject;
+      const bp = this.worldState.blueprints.find((b) => b.type === queuedType);
+      if (!bp) {
+        this.worldState.pendingVotedProject = null;
+        return;
+      }
+      const res = this.worldState.resources;
+      const hasResources =
+        res.wood >= (bp.cost.wood || 0) &&
+        res.stone >= (bp.cost.stone || 0) &&
+        res.food >= (bp.cost.food || 0) &&
+        res.gold >= (bp.cost.gold || 0);
+      if (this.worldState.stats.level >= bp.unlockedAtLevel && hasResources) {
+        const started = this.startNewProject(queuedType);
+        if (started) {
+          this.worldState.pendingVotedProject = null;
+        }
+      }
     }
   }
 }
