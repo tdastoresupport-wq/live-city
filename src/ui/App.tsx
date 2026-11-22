@@ -8,6 +8,7 @@ import { ControlsToolbar } from './components/ControlsToolbar';
 import {
   CityResources,
   CityStats,
+  CityMilestone,
   Building,
   Citizen,
   GameEvent,
@@ -61,6 +62,9 @@ export const App: React.FC = () => {
   const [activeEvent, setActiveEvent] = useState<CityActiveEvent | null>(
     () => worldState.activeEvent
   );
+  const [milestones, setMilestones] = useState<CityMilestone[]>(
+    () => [...worldState.milestones]
+  );
   const [runtimeState, setRuntimeState] = useState<RuntimeClientState>(() =>
     client.getClientState()
   );
@@ -80,6 +84,7 @@ export const App: React.FC = () => {
       setEvents([...worldState.eventLog]);
       setActiveVote(worldState.activeVote ? { ...worldState.activeVote } : null);
       setActiveEvent(worldState.activeEvent ? { ...worldState.activeEvent } : null);
+      setMilestones([...worldState.milestones]);
       setRuntimeState(client.getClientState());
     });
 
@@ -249,6 +254,7 @@ export const App: React.FC = () => {
             resourceNodes={resourceNodesList}
             activeVote={activeVote}
             activeEvent={activeEvent}
+            milestones={milestones}
             liveConnection={runtimeState.liveConnection}
           />
 

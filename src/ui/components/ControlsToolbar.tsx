@@ -54,6 +54,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
         target="_blank"
         rel="noreferrer"
         title="Mở màn hình OBS Stage độc lập (/stage)"
+        aria-label="Mở màn hình OBS Stage độc lập"
         className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 border border-cyan-500/40 transition-all"
       >
         <ExternalLink className="w-3.5 h-3.5" />
@@ -63,6 +64,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
       {/* View Mode Toggle */}
       <button
         onClick={onToggleViewMode}
+        aria-label={isVerticalMode ? 'Chuyển sang màn hình rộng' : 'Chuyển sang khung dọc livestream 9:16'}
         title={
           isVerticalMode
             ? 'Chuyển sang màn hình rộng'
@@ -87,6 +89,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
       {/* Pause / Resume Runtime */}
       <button
         onClick={() => client.togglePauseEngine()}
+        aria-label={engineRunning ? 'Tạm dừng Game Runtime' : 'Tiếp tục Game Runtime'}
         title={engineRunning ? 'Tạm dừng Game Runtime' : 'Tiếp tục Game Runtime'}
         className={`p-1.5 rounded-xl border transition-all ${
           engineRunning
@@ -104,6 +107,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
       {/* Camera Recenter */}
       <button
         onClick={onRecenterCamera}
+        aria-label="Canh giữa camera thành phố"
         title="Canh giữa thành phố"
         className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
       >
@@ -113,6 +117,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
       {/* Sound Mute Toggle */}
       <button
         onClick={onToggleMute}
+        aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
         title={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
         className={`p-1.5 rounded-xl border transition-all ${
           isMuted
@@ -130,6 +135,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
       {/* Save State */}
       <button
         onClick={handleSave}
+        aria-label="Lưu trạng thái thành phố ngay lập tức"
         title="Lưu trạng thái thành phố ngay lập tức"
         className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
       >
@@ -139,6 +145,7 @@ export const ControlsToolbar: React.FC<ControlsToolbarProps> = ({
       {/* Reset World */}
       <button
         onClick={handleReset}
+        aria-label="Đặt lại thế giới"
         title="Đặt lại thế giới (Reset)"
         className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-rose-900/60 text-slate-400 hover:text-rose-200 border border-slate-700/60 transition-all"
       >

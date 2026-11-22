@@ -33,6 +33,8 @@ interface CitizenView {
   targetY: number;
   isMoving: boolean;
   lastStateKey: string;
+  lastFloatColor?: string;
+  lastLevel?: number;
   citizen: Citizen;
 }
 
@@ -56,13 +58,17 @@ export class EntityRenderer {
       activeIds.add(citizen.id);
 
       let view = this.citizenViews.get(citizen.id);
+      const citizenLevel = citizen.level || 1;
+      const displayName =
+        citizenLevel > 1 ? `[Lv.${citizenLevel}] ${citizen.userName}` : citizen.userName;
+
       if (!view) {
         const cContainer = new Container();
         const bodyGraphics = new Graphics();
         const badgeGraphics = new Graphics();
 
         const nameLabel = new Text({
-          text: citizen.userName,
+          text: displayName,
           style: SHARED_NAME_STYLE,
         });
         nameLabel.anchor.set(0.5, 1);
@@ -95,9 +101,16 @@ export class EntityRenderer {
           targetY: citizen.y,
           isMoving: false,
           lastStateKey: '',
+          lastFloatColor: undefined,
+          lastLevel: citizenLevel,
           citizen,
         };
         this.citizenViews.set(citizen.id, view);
+      }
+
+      if (view.lastLevel !== citizenLevel || view.nameLabel.text !== displayName) {
+        view.nameLabel.text = displayName;
+        view.lastLevel = citizenLevel;
       }
 
       view.targetX = citizen.x;
@@ -119,7 +132,10 @@ export class EntityRenderer {
       if (citizen.floatingText) {
         if (view.floatingTextLabel.text !== citizen.floatingText.text) {
           view.floatingTextLabel.text = citizen.floatingText.text;
+        }
+        if (view.lastFloatColor !== citizen.floatingText.color) {
           view.floatingTextLabel.style.fill = citizen.floatingText.color;
+          view.lastFloatColor = citizen.floatingText.color;
         }
         view.floatingTextLabel.visible = true;
       } else {
@@ -142,7 +158,9 @@ export class EntityRenderer {
     }
   }
 
-  public update(deltaTime: number): void {
+  public update(deltaTime: number, reducedMotion = false): boolean {
+    let anyMoved = false;
+
     for (const view of this.citizenViews.values()) {
       // Smooth 60fps position interpolation
       const dx = view.targetX - view.renderX;
@@ -150,6 +168,7 @@ export class EntityRenderer {
       const dist = Math.hypot(dx, dy);
 
       if (dist > 0.005) {
+        anyMoved = true;
         const t = Math.min(1, deltaTime * 12);
         view.renderX = lerp(view.renderX, view.targetX, t);
         view.renderY = lerp(view.renderY, view.targetY, t);
@@ -159,10 +178,12 @@ export class EntityRenderer {
       }
 
       if (view.isMoving || view.citizen.state === 'harvesting' || view.citizen.state === 'building') {
-        view.bobTime += deltaTime * 11;
+        view.bobTime += deltaTime * (reducedMotion ? 3 : 11);
         this.drawCitizen(view, view.citizen);
       }
     }
+
+    return anyMoved;
   }
 
   private drawCitizen(view: CitizenView, citizen: Citizen): void {

@@ -62,3 +62,23 @@
 .animate-construction {
   animation: construction-pulse 2.5s ease-in-out infinite;
 }
+
+/* Keyboard accessibility focus ring */
+:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+/* Reduced motion preference support */
+@media (prefers-reduced-motion: reduce) {
+  .animate-construction,
+  .animate-pulse,
+  .animate-spin {
+    animation: none !important;
+  }
+
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

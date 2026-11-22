@@ -6,6 +6,7 @@ import {
   BuildingBlueprint,
   VotingSession,
   CityActiveEvent,
+  CityMilestone,
   LiveConnectionState,
   CityEventType,
 } from '../../core/types';
@@ -34,6 +35,7 @@ interface CityInspectorProps {
   resourceNodes: ResourceNode[];
   activeVote: VotingSession | null;
   activeEvent: CityActiveEvent | null;
+  milestones?: CityMilestone[];
   liveConnection: LiveConnectionState;
 }
 
@@ -46,6 +48,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
   resourceNodes,
   activeVote,
   activeEvent,
+  milestones = [],
   liveConnection,
 }) => {
   const [activeTab, setActiveTab] = useState<
@@ -119,9 +122,10 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
   return (
     <div className="glass-panel p-3 rounded-2xl flex flex-col h-80">
       {/* Tabs */}
-      <div className="grid grid-cols-4 gap-1 pb-2 mb-2 border-b border-slate-800">
+      <div className="grid grid-cols-4 gap-1 pb-2 mb-2 border-b border-slate-800" role="tablist" aria-label="Bảng điều tra thành phố">
         <button
           onClick={() => setActiveTab('projects')}
+          aria-label="Tab Dự án và Biểu quyết"
           className={`px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all ${
             activeTab === 'projects'
               ? 'bg-amber-600 text-white'
@@ -132,6 +136,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('citizens')}
+          aria-label="Tab Danh sách Cư dân"
           className={`px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all ${
             activeTab === 'citizens'
               ? 'bg-cyan-600 text-white'
@@ -142,6 +147,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('events')}
+          aria-label="Tab Sự kiện và Tài nguyên"
           className={`px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all ${
             activeTab === 'events'
               ? 'bg-purple-600 text-white'
@@ -152,6 +158,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('live')}
+          aria-label="Tab Live Stream và OBS"
           className={`px-2 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all ${
             activeTab === 'live'
               ? 'bg-emerald-600 text-white'
@@ -183,6 +190,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
               {activeVote && activeVote.status === 'open' ? (
                 <button
                   onClick={() => client.closeVote()}
+                  aria-label="Chốt phiếu bầu chọn hiện tại"
                   className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold shrink-0"
                 >
                   Chốt Phiếu
@@ -190,12 +198,32 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
               ) : (
                 <button
                   onClick={() => client.openVote(90)}
+                  aria-label="Mở phiên bình chọn dự án 90 giây"
                   className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold shrink-0"
                 >
                   Mở Vote 90s
                 </button>
               )}
             </div>
+
+            {milestones.length > 0 && (
+              <div className="p-2 rounded-xl bg-amber-950/30 border border-amber-500/30 space-y-1">
+                <div className="text-[10px] uppercase font-bold text-amber-300 tracking-wider">
+                  Thành tựu thành phố ({milestones.length}):
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {milestones.map((m) => (
+                    <span
+                      key={m.id}
+                      title={m.description}
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 border border-amber-600/30 font-semibold"
+                    >
+                      🏅 {m.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Blueprint Catalog */}
             <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
@@ -267,6 +295,9 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
                         style={{ backgroundColor: c.color }}
                       />
                       <span className="font-bold text-slate-200">{c.userName}</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-amber-300 font-mono">
+                        Lv.{c.level || 1} • {c.title || 'Tân Binh'}
+                      </span>
                     </div>
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-cyan-300 border border-slate-700/60 font-medium">
                       {getCitizenStateLabel(c)}
@@ -275,6 +306,10 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
 
                   {selectedCitizenId === c.id && selectedCitizen && (
                     <div className="mt-2 pt-2 border-t border-slate-700/60 space-y-1 text-[10px] text-slate-300">
+                      <div className="flex items-center justify-between text-amber-200 font-mono">
+                        <span>Kinh nghiệm: {c.xp || 0} XP</span>
+                        <span>Danh hiệu: {c.title || 'Tân Binh'}</span>
+                      </div>
                       <div className="grid grid-cols-4 gap-1">
                         <div>
                           🪵 Gỗ: <b className="text-emerald-300">{c.stats.woodHarvested}</b>
@@ -438,6 +473,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
                   type="text"
                   value={tiktokChannel}
                   onChange={(e) => setTiktokChannel(e.target.value)}
+                  aria-label="Tên kênh TikTok Live"
                   placeholder="TikTok @username (vd: @livecity_official)"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-200"
                 />
@@ -445,6 +481,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
                   type="text"
                   value={tiktokBridgeUrl}
                   onChange={(e) => setTiktokBridgeUrl(e.target.value)}
+                  aria-label="Địa chỉ WebSocket Bridge cục bộ"
                   placeholder="Local Bridge URL (tùy chọn, vd: ws://127.0.0.1:21213)"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-200"
                 />
@@ -453,6 +490,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
                     type="checkbox"
                     checked={requireAck}
                     onChange={(e) => setRequireAck(e.target.checked)}
+                    aria-label="Bắt buộc xác thực handshake Strict ACK"
                     className="rounded border-slate-700 text-cyan-500 focus:ring-0 bg-slate-900"
                   />
                   <span>Bắt buộc xác thực handshake (Strict ACK)</span>
@@ -467,12 +505,14 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
                         requireAck
                       )
                     }
+                    aria-label="Kết nối TikTok Bridge"
                     className="flex-1 py-1.5 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white font-bold text-[11px]"
                   >
                     Kết nối TikTok Bridge
                   </button>
                   <button
                     onClick={() => client.connectLiveAdapter('mock', 'mock_simulator_room')}
+                    aria-label="Chuyển sang nguồn giả lập Mock"
                     className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[11px]"
                   >
                     Dùng Mock

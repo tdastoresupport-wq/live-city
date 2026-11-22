@@ -25,6 +25,9 @@ export class PixiWorldRenderer {
   private initialized = false;
   private destroyed = false;
   private lastAmbientPhase = '';
+  private lastSyncedVersion = -1;
+  private reducedMotion = false;
+  private needsSort = true;
   private cleanupListeners: Array<() => void> = [];
 
   constructor() {
@@ -77,31 +80,65 @@ export class PixiWorldRenderer {
     this.camera.init(width, height);
     this.setupInteractions(canvas);
 
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+      this.reducedMotion = mq.matches;
+      const onMotionChange = (e: MediaQueryListEvent) => {
+        this.reducedMotion = e.matches;
+      };
+      mq.addEventListener?.('change', onMotionChange);
+      this.cleanupListeners.push(() => mq.removeEventListener?.('change', onMotionChange));
+    }
+
     this.initialized = true;
+  }
+
+  public setReducedMotion(value: boolean): void {
+    this.reducedMotion = value;
   }
 
   public initWorldState(worldState: WorldState): void {
     if (!this.initialized || this.destroyed) return;
     this.grid.init(worldState);
+    this.lastSyncedVersion = -1;
     this.sync(worldState);
+  }
+
+  /**
+   * Synchronizes Pixi entities/buildings/tiles only when WorldState's monotonic version changes.
+   */
+  public syncIfNeeded(worldState: WorldState): boolean {
+    if (!this.initialized || this.destroyed) return false;
+    const version = worldState.getStateVersion();
+    if (version === this.lastSyncedVersion) {
+      return false;
+    }
+    this.sync(worldState);
+    return true;
   }
 
   public sync(worldState: WorldState): void {
     if (!this.initialized || this.destroyed) return;
+    this.lastSyncedVersion = worldState.getStateVersion();
     this.grid.syncDiscovery(worldState);
     this.resources.syncNodes(worldState.resourceNodes.values());
     this.structures.syncBuildings(worldState.buildings.values());
     this.entities.syncCitizens(worldState.citizens.values());
     this.sceneObjectsContainer.sortChildren();
+    this.needsSort = false;
     this.drawAmbient(worldState.stats.dayTime);
   }
 
   public update(deltaTime: number): void {
     if (!this.initialized || this.destroyed) return;
-    this.grid.update(deltaTime);
-    this.resources.update(deltaTime);
-    this.entities.update(deltaTime);
-    this.sceneObjectsContainer.sortChildren();
+    const envDelta = this.reducedMotion ? 0 : deltaTime;
+    this.grid.update(envDelta);
+    this.resources.update(envDelta);
+    const anyMoved = this.entities.update(deltaTime, this.reducedMotion);
+    if (anyMoved || this.needsSort) {
+      this.sceneObjectsContainer.sortChildren();
+      this.needsSort = false;
+    }
     this.camera.update(deltaTime);
   }
 

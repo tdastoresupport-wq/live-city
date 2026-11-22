@@ -26,9 +26,10 @@ export const LeaderboardHUD: React.FC<LeaderboardHUDProps> = ({ citizens }) => {
         </div>
 
         {/* Tab switch */}
-        <div className="flex bg-slate-900/80 p-0.5 rounded-lg border border-slate-800">
+        <div className="flex bg-slate-900/80 p-0.5 rounded-lg border border-slate-800" role="tablist" aria-label="Bảng xếp hạng theo tiêu chí">
           <button
             onClick={() => setTab('build')}
+            aria-label="Xếp hạng theo điểm xây dựng"
             className={`px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1 transition-all ${
               tab === 'build' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
@@ -37,6 +38,7 @@ export const LeaderboardHUD: React.FC<LeaderboardHUDProps> = ({ citizens }) => {
           </button>
           <button
             onClick={() => setTab('wood')}
+            aria-label="Xếp hạng theo sản lượng gỗ"
             className={`px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1 transition-all ${
               tab === 'wood' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
@@ -45,6 +47,7 @@ export const LeaderboardHUD: React.FC<LeaderboardHUDProps> = ({ citizens }) => {
           </button>
           <button
             onClick={() => setTab('stone')}
+            aria-label="Xếp hạng theo sản lượng đá"
             className={`px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1 transition-all ${
               tab === 'stone' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-200'
             }`}
@@ -84,8 +87,14 @@ export const LeaderboardHUD: React.FC<LeaderboardHUDProps> = ({ citizens }) => {
                     className="w-2.5 h-2.5 rounded-full"
                     style={{ backgroundColor: c.color }}
                   />
-                  <span className="font-medium text-slate-200 truncate max-w-[100px]">
+                  <span className="font-medium text-slate-200 truncate max-w-[92px]">
                     {c.userName}
+                  </span>
+                  <span
+                    title={c.title || 'Tân Binh'}
+                    className="text-[9px] px-1 py-0.2 rounded bg-slate-800/90 text-cyan-300 font-mono shrink-0"
+                  >
+                    Lv.{c.level || 1}
                   </span>
                 </div>
                 <span className="font-mono text-xs font-bold text-amber-300/90">{score}</span>

@@ -84,7 +84,7 @@ export const StreamStage: React.FC<StreamStageProps> = ({
         lastTime = time;
 
         renderer.update(delta);
-        renderer.sync(worldState);
+        renderer.syncIfNeeded(worldState);
 
         animId = requestAnimationFrame(renderLoop);
       };

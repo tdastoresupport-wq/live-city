@@ -59,6 +59,7 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({
 
         <button
           onClick={toggleBotSimulation}
+          aria-label={isBotRunning ? 'Dừng bot giả lập khán giả' : 'Chạy bot giả lập khán giả'}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all shadow-md ${
             isBotRunning
               ? 'bg-rose-600 hover:bg-rose-500 text-white animate-pulse'
@@ -85,6 +86,7 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({
           type="text"
           value={userName}
           onChange={(e) => setUserName(e.target.value)}
+          aria-label="Tên người xem giả lập"
           className="bg-transparent text-xs text-amber-200 font-semibold focus:outline-none flex-1"
           placeholder="Nhập tên người xem..."
         />
@@ -175,11 +177,13 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({
           type="text"
           value={customComment}
           onChange={(e) => setCustomComment(e.target.value)}
+          aria-label="Nhập comment livestream giả lập"
           placeholder="Nhập comment (vd: !xay, vote 1, chat go)..."
           className="flex-1 bg-slate-900/90 border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/80"
         />
         <button
           type="submit"
+          aria-label="Gửi comment giả lập"
           className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center gap-1 transition-all shadow"
         >
           <Send className="w-3.5 h-3.5" /> Gửi
@@ -192,12 +196,14 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({
         <div className="flex gap-2">
           <button
             onClick={handleBurstTest}
+            aria-label="Kiểm thử Burst 5 người dùng đồng thời"
             className="flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-900/40 hover:bg-indigo-900/70 text-indigo-300 border border-indigo-700/50 transition-all font-semibold"
           >
             <Zap className="w-3 h-3 text-indigo-400" /> Burst 5 Users
           </button>
           <button
             onClick={handleSpamTest}
+            aria-label="Kiểm thử chống spam Rate Limiter"
             className="flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-950/70 text-rose-300 border border-rose-700/50 transition-all font-semibold"
           >
             <ShieldAlert className="w-3 h-3 text-rose-400" /> Test Spam
