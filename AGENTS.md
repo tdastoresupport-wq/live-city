@@ -6,8 +6,8 @@ Tài liệu này là quy chuẩn bắt buộc cho mọi Agent và kỹ sư tham 
 
 ## 1. THÔNG TIN REPOSITORY CHÍNH THỨC
 
-- **GitHub Repository:** https://github.com/zevxstore-crypto/live-city
-- **Remote URL:** `https://github.com/zevxstore-crypto/live-city.git`
+- **GitHub Repository:** https://github.com/tdastoresupport-wq/live-city
+- **Remote URL:** `https://github.com/tdastoresupport-wq/live-city.git`
 - **Default Branch:** `main`
 - **Nguyên tắc tối thượng:** Mọi thay đổi mã nguồn có ý nghĩa đều phải được commit và push lên GitHub. Không được chỉ lưu thay đổi trên máy local rồi tuyên bố đã hoàn thành.
 
