@@ -40,6 +40,8 @@ export class GameServer {
   private pendingBroadcast = false;
   private lastBroadcastTime = 0;
 
+  private activePlatform: 'mock' | 'tiktok_experimental' = 'mock';
+
   constructor(options: GameServerOptions = {}) {
     this.host = options.host || process.env.LIVE_CITY_HOST || '127.0.0.1';
     this.port = options.port ?? Number(process.env.LIVE_CITY_PORT || 4000);
@@ -48,14 +50,9 @@ export class GameServer {
       process.env.LIVE_CITY_OPERATOR_TOKEN ||
       crypto.randomBytes(24).toString('hex');
 
-    const persistence = options.persistence || new FilePersistenceAdapter();
-    this.engine = new GameEngine({
-      persistence,
-      headless: true,
-      tickRateHz: 25,
-    });
-
     const bridgeUrl = process.env.TIKTOK_BRIDGE_URL || '';
+    this.activePlatform = bridgeUrl ? 'tiktok_experimental' : 'mock';
+
     const transport =
       options.tiktokTransport ||
       (bridgeUrl && (bridgeUrl.startsWith('ws://') || bridgeUrl.startsWith('wss://'))
@@ -67,29 +64,12 @@ export class GameServer {
       bridgeUrl,
     });
 
-    // Wire TikTok adapter events directly to engine command dispatcher
-    this.tiktokAdapter.onComment((comment) => {
-      try {
-        this.engine.commandDispatcher.processComment(comment);
-      } catch (err) {
-        console.error('Error processing live comment:', err);
-      }
-    });
-
-    this.tiktokAdapter.onGift((gift) => {
-      try {
-        this.engine.commandDispatcher.processGift(gift);
-      } catch (err) {
-        console.error('Error processing live gift:', err);
-      }
-    });
-
-    this.tiktokAdapter.onLike((like) => {
-      try {
-        this.engine.commandDispatcher.processLike(like);
-      } catch (err) {
-        console.error('Error processing live like:', err);
-      }
+    const persistence = options.persistence || new FilePersistenceAdapter();
+    this.engine = new GameEngine({
+      persistence,
+      headless: true,
+      tickRateHz: 25,
+      liveAdapter: this.tiktokAdapter,
     });
 
     // Listen to live adapter state changes and broadcast
@@ -110,8 +90,8 @@ export class GameServer {
   }
 
   public getActiveLiveState(): LiveConnectionState {
-    if (this.engine.liveAdapter.getConnectionState) {
-      return this.engine.liveAdapter.getConnectionState();
+    if (this.activePlatform === 'tiktok_experimental') {
+      return this.tiktokAdapter.getConnectionState();
     }
     return this.engine.mockAdapter.getConnectionState();
   }
@@ -572,8 +552,8 @@ export class GameServer {
         const bridgeUrl = typeof body.bridgeUrl === 'string' ? body.bridgeUrl.trim() : undefined;
 
         if (platform === 'mock') {
-          await this.tiktokAdapter.disconnect();
-          this.engine.setLiveAdapter(this.engine.mockAdapter);
+          this.activePlatform = 'mock';
+          await this.tiktokAdapter.disconnect().catch(() => {});
           await this.engine.mockAdapter.connect({ channelId: channelId || 'mock_simulator_room' });
           this.broadcastState();
           res.writeHead(200, corsHeaders);
@@ -582,7 +562,7 @@ export class GameServer {
         }
 
         if (platform === 'tiktok_experimental') {
-          this.engine.setLiveAdapter(this.tiktokAdapter);
+          this.activePlatform = 'tiktok_experimental';
           try {
             await this.tiktokAdapter.connect({ channelId, bridgeUrl });
             this.broadcastState();
@@ -604,7 +584,11 @@ export class GameServer {
       }
 
       if (pathname === '/api/live/disconnect') {
-        await this.engine.liveAdapter.disconnect();
+        if (this.activePlatform === 'tiktok_experimental') {
+          await this.tiktokAdapter.disconnect().catch(() => {});
+        } else {
+          await this.engine.mockAdapter.disconnect().catch(() => {});
+        }
         this.broadcastState();
         res.writeHead(200, corsHeaders);
         res.end(JSON.stringify({ ok: true, liveConnection: this.getActiveLiveState() }));

@@ -130,10 +130,13 @@ export class GameEngine {
   public async init(): Promise<void> {
     await this.mockAdapter.connect();
     if (this.liveAdapter !== this.mockAdapter) {
-      try {
-        await this.liveAdapter.connect();
-      } catch (err) {
-        console.warn('Primary live adapter connect warning:', err);
+      const state = this.liveAdapter.getConnectionState ? this.liveAdapter.getConnectionState() : null;
+      if (state?.channelId) {
+        try {
+          await this.liveAdapter.connect();
+        } catch (err) {
+          console.warn('Primary live adapter connect warning:', err);
+        }
       }
     }
 

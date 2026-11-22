@@ -8,6 +8,10 @@ import {
 import { Deduplicator } from '../commands/Deduplicator';
 import { CommandParser } from '../commands/CommandParser';
 import { generateId } from '../utils/id';
+import {
+  WebSocketBridgeTransport,
+  validateBridgeUrl,
+} from './WebSocketBridgeTransport';
 
 export interface ExternalStreamPayload {
   type: 'comment' | 'gift' | 'like' | 'connected' | 'disconnected' | 'error';
@@ -25,11 +29,22 @@ export interface ExternalStreamPayload {
   error?: string;
 }
 
+export interface BridgeTransportConnectOptions {
+  requireAck?: boolean;
+  ackTimeoutMs?: number;
+  connectTimeoutMs?: number;
+}
+
 export interface ILiveBridgeTransport {
-  connect(channelId: string, bridgeUrl: string): Promise<void>;
+  connect(
+    channelId: string,
+    bridgeUrl: string,
+    options?: BridgeTransportConnectOptions
+  ): Promise<void>;
   disconnect(): Promise<void>;
   onMessage(cb: (payload: ExternalStreamPayload) => void): () => void;
   onClose(cb: (reason?: string) => void): () => void;
+  isSubscriptionVerified?(): boolean;
 }
 
 export interface TikTokLiveAdapterOptions {
@@ -40,6 +55,7 @@ export interface TikTokLiveAdapterOptions {
   baseBackoffMs?: number;
   maxReconnectAttempts?: number;
   maxReplayAgeMs?: number;
+  requireAck?: boolean;
 }
 
 /**
@@ -120,21 +136,58 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
     return () => this.likeCallbacks.delete(callback);
   }
 
-  public async connect(connectOpts?: { channelId?: string; bridgeUrl?: string }): Promise<void> {
+  public async connect(connectOpts?: {
+    channelId?: string;
+    bridgeUrl?: string;
+    transport?: ILiveBridgeTransport;
+    requireAck?: boolean;
+  }): Promise<void> {
     this.clearReconnectTimer();
     this.manualDisconnect = false;
 
     const channelId = (connectOpts?.channelId ?? this.options.channelId ?? '').trim();
-    const bridgeUrl = (connectOpts?.bridgeUrl ?? this.options.bridgeUrl ?? '').trim();
+    let bridgeUrl = (connectOpts?.bridgeUrl ?? this.options.bridgeUrl ?? '').trim();
     this.options.channelId = channelId;
-    if (bridgeUrl) this.options.bridgeUrl = bridgeUrl;
 
     if (!channelId) {
       this.updateState({
         status: 'error',
         errorMessage: 'Thiếu TikTok Channel ID (@username). Không thể kết nối.',
+        subscriptionVerified: false,
       });
       throw new Error('Missing TikTok channelId');
+    }
+
+    // 1. Dynamic Transport Injection or Replacement:
+    if (connectOpts?.transport) {
+      if (this.options.transport && this.options.transport !== connectOpts.transport) {
+        await this.options.transport.disconnect().catch(() => {});
+      }
+      this.options.transport = connectOpts.transport;
+    } else if (bridgeUrl) {
+      const validation = validateBridgeUrl(bridgeUrl);
+      if (!validation.valid || !validation.normalized) {
+        this.updateState({
+          status: 'error',
+          errorMessage: validation.error || 'Định dạng URL của Bridge không hợp lệ.',
+          subscriptionVerified: false,
+        });
+        throw new Error(validation.error || 'Invalid bridge URL');
+      }
+      bridgeUrl = validation.normalized;
+      this.options.bridgeUrl = bridgeUrl;
+
+      // If no transport exists or if bridgeUrl has changed, replace transport cleanly
+      if (
+        !this.options.transport ||
+        (this.options.transport instanceof WebSocketBridgeTransport &&
+          connectOpts?.bridgeUrl !== undefined)
+      ) {
+        if (this.options.transport) {
+          await this.options.transport.disconnect().catch(() => {});
+        }
+        this.options.transport = new WebSocketBridgeTransport();
+      }
     }
 
     this.updateState({
@@ -149,17 +202,24 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
         status: 'error',
         errorMessage:
           'Chưa cấu hình TikTok Bridge/Connector (TIKTOK_BRIDGE_URL). Đang ở chế độ chờ tích hợp thật.',
+        subscriptionVerified: false,
       });
       throw new Error('TIKTOK_BRIDGE_NOT_CONFIGURED');
     }
 
+    const requireAck = connectOpts?.requireAck ?? this.options.requireAck ?? false;
+
     try {
-      await this.connectWithTimeout(channelId, this.options.bridgeUrl || '');
+      await this.connectWithTimeout(channelId, this.options.bridgeUrl || '', requireAck);
+      const isVerified = this.options.transport?.isSubscriptionVerified
+        ? this.options.transport.isSubscriptionVerified()
+        : undefined;
       this.updateState({
         status: 'connected',
         channelId,
         connectedAt: Date.now(),
         reconnectAttempts: 0,
+        subscriptionVerified: isVerified,
         errorMessage: undefined,
       });
     } catch (err) {
@@ -167,13 +227,18 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       this.updateState({
         status: 'error',
         errorMessage: msg,
+        subscriptionVerified: false,
       });
       this.scheduleReconnectIfAllowed();
       throw err;
     }
   }
 
-  private async connectWithTimeout(channelId: string, bridgeUrl: string): Promise<void> {
+  private async connectWithTimeout(
+    channelId: string,
+    bridgeUrl: string,
+    requireAck?: boolean
+  ): Promise<void> {
     this.cleanupTransportListeners();
     const transport = this.options.transport;
     if (!transport) {
@@ -194,7 +259,13 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
     });
 
     try {
-      await Promise.race([transport.connect(channelId, bridgeUrl), timeoutPromise]);
+      await Promise.race([
+        transport.connect(channelId, bridgeUrl, {
+          connectTimeoutMs: this.options.connectTimeoutMs,
+          requireAck,
+        }),
+        timeoutPromise,
+      ]);
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
@@ -205,6 +276,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
     this.updateState({
       status: 'error',
       errorMessage: reason || 'Mất kết nối tới nguồn sự kiện livestream.',
+      subscriptionVerified: false,
     });
     this.scheduleReconnectIfAllowed();
   }
@@ -243,6 +315,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       status: 'disconnected',
       connectedAt: undefined,
       reconnectAttempts: 0,
+      subscriptionVerified: false,
     });
   }
 
@@ -255,34 +328,37 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       if (!payload || typeof payload !== 'object') return false;
 
       const now = Date.now();
-      const eventTs =
-        typeof payload.timestamp === 'number' && Number.isFinite(payload.timestamp)
-          ? payload.timestamp
-          : now;
+      let eventTs = now;
+      const rawTs = Number(payload.timestamp);
+      if (Number.isFinite(rawTs) && rawTs > 0) {
+        // Automatically normalize Unix timestamp seconds into milliseconds
+        eventTs = rawTs < 1e11 ? Math.floor(rawTs * 1000) : Math.floor(rawTs);
+      }
 
       // Anti-replay check: reject events older than maxReplayAgeMs or too far in the future
       if (Math.abs(now - eventTs) > this.options.maxReplayAgeMs) {
         return false;
       }
 
-      const rawUserId = (payload.userId || payload.uniqueId || '').trim();
+      const rawUserId = String(payload.userId ?? payload.uniqueId ?? '').trim();
       if (!rawUserId && ['comment', 'gift', 'like'].includes(payload.type)) {
         return false;
       }
 
-      const eventId = (payload.eventId || generateId(`tt_${payload.type}`)).trim();
+      const rawEventId = payload.eventId != null ? String(payload.eventId).trim() : '';
+      const eventId = rawEventId || generateId(`tt_${payload.type}`);
       if (!this.deduplicator.isUnique(eventId, now)) {
         return false; // Duplicate rejected
       }
 
       const userName = CommandParser.sanitizeText(
-        payload.nickname || payload.uniqueId || rawUserId,
+        String(payload.nickname ?? payload.uniqueId ?? rawUserId),
         36
       );
 
       if (payload.type === 'comment') {
-        const text = CommandParser.sanitizeText(payload.comment || '', 80);
-        if (!text) return false;
+        const text = CommandParser.sanitizeText(String(payload.comment ?? ''), 80);
+        if (!text || !text.trim()) return false;
 
         const normalized: RawLiveComment = {
           id: eventId,
@@ -294,6 +370,7 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
 
         this.connectionState.eventsReceived += 1;
         this.connectionState.lastEventAt = now;
+        this.connectionState.subscriptionVerified = true;
         for (const cb of this.commentCallbacks) {
           cb(normalized);
         }
@@ -301,18 +378,22 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       }
 
       if (payload.type === 'gift') {
+        const giftCount = Math.max(1, Math.min(99999, Math.floor(Number(payload.repeatCount) || 1)));
+        const diamondValue = Math.max(0, Math.min(1000000, Math.floor(Number(payload.diamondCount) || 0)));
+
         const normalized: RawLiveGift = {
           id: eventId,
           userId: rawUserId,
           userName,
-          giftName: CommandParser.sanitizeText(payload.giftName || 'Gift', 36),
-          giftCount: Math.max(1, Number(payload.repeatCount) || 1),
-          diamondValue: Math.max(0, Number(payload.diamondCount) || 0),
+          giftName: CommandParser.sanitizeText(String(payload.giftName || 'Gift'), 36),
+          giftCount,
+          diamondValue,
           timestamp: eventTs,
         };
 
         this.connectionState.eventsReceived += 1;
         this.connectionState.lastEventAt = now;
+        this.connectionState.subscriptionVerified = true;
         for (const cb of this.giftCallbacks) {
           cb(normalized);
         }
@@ -320,17 +401,21 @@ export class TikTokLiveAdapter implements ILiveEventAdapter {
       }
 
       if (payload.type === 'like') {
+        const likeCount = Math.max(1, Math.min(10000, Math.floor(Number(payload.likeCount) || 1)));
+        const totalLikes = Math.max(1, Math.floor(Number(payload.totalLikeCount) || likeCount));
+
         const normalized: RawLiveLike = {
           id: eventId,
           userId: rawUserId,
           userName,
-          likeCount: Math.max(1, Number(payload.likeCount) || 1),
-          totalLikes: Math.max(1, Number(payload.totalLikeCount) || 1),
+          likeCount,
+          totalLikes,
           timestamp: eventTs,
         };
 
         this.connectionState.eventsReceived += 1;
         this.connectionState.lastEventAt = now;
+        this.connectionState.subscriptionVerified = true;
         for (const cb of this.likeCallbacks) {
           cb(normalized);
         }

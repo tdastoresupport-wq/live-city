@@ -17,6 +17,7 @@ export interface LiveConnectionState {
   lastEventAt?: number;
   errorMessage?: string;
   isExperimental?: boolean;
+  subscriptionVerified?: boolean;
   eventsReceived: number;
   reconnectAttempts: number;
 }
