@@ -1,30 +1,48 @@
 import React, { useEffect, useRef } from 'react';
 import { PixiWorldRenderer } from '../../renderer/PixiWorldRenderer';
-import { GameEngine } from '../../core/engine/GameEngine';
+import { WorldState } from '../../core/state/WorldState';
 import { StreamHUD } from './StreamHUD';
 import { BuildingProgressBar } from './BuildingProgressBar';
 import { LiveActivityFeed } from './LiveActivityFeed';
 import { LeaderboardHUD } from './LeaderboardHUD';
-import { CityResources, CityStats, Building, Citizen, GameEvent } from '../../core/types';
+import {
+  CityResources,
+  CityStats,
+  Building,
+  Citizen,
+  GameEvent,
+  VotingSession,
+  CityActiveEvent,
+} from '../../core/types';
 
 interface StreamStageProps {
-  engine: GameEngine;
+  worldState: WorldState;
   rendererRef: React.MutableRefObject<PixiWorldRenderer | null>;
   isVerticalMode: boolean;
+  isObsStageOnly?: boolean;
+  transparentBackground?: boolean;
   stats: CityStats;
   resources: CityResources;
+  maxStorage?: CityResources;
   activeBuilding?: Building;
+  activeVote?: VotingSession | null;
+  activeEvent?: CityActiveEvent | null;
   citizens: Citizen[];
   events: GameEvent[];
 }
 
 export const StreamStage: React.FC<StreamStageProps> = ({
-  engine,
+  worldState,
   rendererRef,
   isVerticalMode,
+  isObsStageOnly = false,
+  transparentBackground = false,
   stats,
   resources,
+  maxStorage,
   activeBuilding,
+  activeVote,
+  activeEvent,
   citizens,
   events,
 }) => {
@@ -32,30 +50,37 @@ export const StreamStage: React.FC<StreamStageProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    let renderer: PixiWorldRenderer | null = null;
-    let animId: number;
+    let active = true;
+    let animId = 0;
+    const renderer = new PixiWorldRenderer();
 
     const setupPixi = async () => {
       if (!canvasRef.current || !containerRef.current) return;
 
       const rect = containerRef.current.getBoundingClientRect();
-      const width = Math.max(320, Math.floor(rect.width));
-      const height = Math.max(480, Math.floor(rect.height));
+      const width = Math.max(320, Math.floor(rect.width) || 1080);
+      const height = Math.max(480, Math.floor(rect.height) || 1920);
 
-      renderer = new PixiWorldRenderer();
-      await renderer.init(canvasRef.current, width, height);
-      renderer.initWorldState(engine.worldState);
+      await renderer.init(canvasRef.current, width, height, {
+        transparentBackground,
+      });
+
+      if (!active) {
+        renderer.destroy();
+        return;
+      }
+
+      renderer.initWorldState(worldState);
       rendererRef.current = renderer;
 
       let lastTime = performance.now();
       const renderLoop = (time: number) => {
+        if (!active) return;
         const delta = Math.min((time - lastTime) / 1000, 0.1);
         lastTime = time;
 
-        if (renderer) {
-          renderer.update(delta);
-          renderer.sync(engine.worldState);
-        }
+        renderer.update(delta);
+        renderer.sync(worldState);
 
         animId = requestAnimationFrame(renderLoop);
       };
@@ -65,15 +90,13 @@ export const StreamStage: React.FC<StreamStageProps> = ({
 
     setupPixi();
 
-    // Resize observer
     const resizeObserver = new ResizeObserver((entries) => {
+      if (!active) return;
       for (const entry of entries) {
-        if (rendererRef.current) {
-          const w = Math.floor(entry.contentRect.width);
-          const h = Math.floor(entry.contentRect.height);
-          if (w > 0 && h > 0) {
-            rendererRef.current.resize(w, h);
-          }
+        const w = Math.floor(entry.contentRect.width);
+        const h = Math.floor(entry.contentRect.height);
+        if (w > 0 && h > 0) {
+          renderer.resize(w, h);
         }
       }
     });
@@ -83,21 +106,29 @@ export const StreamStage: React.FC<StreamStageProps> = ({
     }
 
     return () => {
+      active = false;
       cancelAnimationFrame(animId);
       resizeObserver.disconnect();
-      if (renderer) {
-        renderer.destroy();
+      renderer.destroy();
+      if (rendererRef.current === renderer) {
         rendererRef.current = null;
       }
     };
-  }, [engine, rendererRef]);
+  }, [worldState, rendererRef, transparentBackground]);
 
   return (
     <div
       ref={containerRef}
-      className={`relative overflow-hidden bg-slate-950 flex flex-col justify-between transition-all duration-300 ${
-        isVerticalMode
-          ? 'w-full max-w-[480px] h-[850px] max-h-[92vh] rounded-3xl shadow-2xl border-2 border-amber-500/30'
+      style={{
+        aspectRatio: isVerticalMode || isObsStageOnly ? '9 / 16' : undefined,
+      }}
+      className={`relative overflow-hidden flex flex-col justify-between transition-all duration-300 ${
+        transparentBackground ? 'bg-transparent' : 'bg-slate-950'
+      } ${
+        isObsStageOnly
+          ? 'w-full h-full max-w-[1080px] max-h-[1920px] mx-auto'
+          : isVerticalMode
+          ? 'h-full max-h-[92vh] w-auto max-w-full rounded-3xl shadow-2xl border-2 border-amber-500/30'
           : 'w-full h-full rounded-2xl border border-slate-800'
       }`}
     >
@@ -107,19 +138,23 @@ export const StreamStage: React.FC<StreamStageProps> = ({
         className="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing block"
       />
 
-      {/* TOP OVERLAYS (HUD) */}
+      {/* TOP OVERLAYS (HUD, Resources, Voting, Events) */}
       <div className="relative z-10 p-3 flex flex-col gap-2 pointer-events-none">
-        <StreamHUD stats={stats} resources={resources} />
+        <StreamHUD
+          stats={stats}
+          resources={resources}
+          maxStorage={maxStorage}
+          activeVote={activeVote}
+          activeEvent={activeEvent}
+        />
       </div>
 
       {/* BOTTOM OVERLAYS (Building progress, Activity feed, Leaderboard) */}
       <div className="relative z-10 p-3 flex flex-col gap-2 pointer-events-none">
-        {/* Active Building Banner */}
         <div className="pointer-events-auto">
           <BuildingProgressBar building={activeBuilding} />
         </div>
 
-        {/* Dynamic Activity Feed & Leaderboard side-by-side or stacked in vertical mode */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pointer-events-auto">
           <LiveActivityFeed events={events} />
           <LeaderboardHUD citizens={citizens} />

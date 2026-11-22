@@ -1,68 +1,62 @@
 import React, { useState } from 'react';
-import { MockLiveAdapter } from '../../core/adapters/MockLiveAdapter';
-import { Send, Play, Square, Zap, ShieldAlert, User, Terminal } from 'lucide-react';
+import { GameRuntimeClient } from '../services/GameRuntimeClient';
+import {
+  Send,
+  Play,
+  Square,
+  Zap,
+  ShieldAlert,
+  User,
+  Terminal,
+  Gift,
+  Heart,
+} from 'lucide-react';
 
 interface CommentSimulatorProps {
-  liveAdapter: MockLiveAdapter;
+  client: GameRuntimeClient;
+  isBotRunning: boolean;
 }
 
-export const CommentSimulator: React.FC<CommentSimulatorProps> = ({ liveAdapter }) => {
+export const CommentSimulator: React.FC<CommentSimulatorProps> = ({
+  client,
+  isBotRunning,
+}) => {
   const [userName, setUserName] = useState('NguoiXem_01');
   const [customComment, setCustomComment] = useState('');
-  const [isBotRunning, setIsBotRunning] = useState(liveAdapter.isBotSimulationRunning());
 
   const handleSendCommand = (cmd: string) => {
-    liveAdapter.emitComment(cmd, userName);
+    client.sendComment(cmd, userName);
   };
 
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customComment.trim()) return;
-    liveAdapter.emitComment(customComment.trim(), userName);
+    client.sendComment(customComment.trim(), userName);
     setCustomComment('');
   };
 
   const toggleBotSimulation = () => {
-    if (isBotRunning) {
-      liveAdapter.stopBotSimulation();
-      setIsBotRunning(false);
-    } else {
-      liveAdapter.startBotSimulation(2500);
-      setIsBotRunning(true);
-    }
+    client.toggleBot(2500);
   };
 
-  // Burst test: injects 6 simultaneous viewer comments to verify concurrency
   const handleBurstTest = () => {
-    const burstUsers = ['Minh_Khang', 'Thu_Thao', 'Bao_Long', 'Kim_Ngan', 'Tuan_Anh'];
-    const actions = ['VÀO', 'GỖ', 'ĐÁ', 'XÂY', 'KHÁM PHÁ'];
-    burstUsers.forEach((u, idx) => {
-      setTimeout(() => {
-        liveAdapter.emitComment(actions[idx % actions.length], u);
-      }, idx * 100);
-    });
+    client.runBurstTest();
   };
 
-  // Spam test: sends 5 rapid comments from same user within 200ms to test rate limiter
   const handleSpamTest = () => {
-    for (let i = 0; i < 4; i++) {
-      setTimeout(() => {
-        liveAdapter.emitComment('GỖ', 'SpamBot_Test');
-      }, i * 80);
-    }
+    client.runSpamTest();
   };
 
   return (
-    <div className="glass-panel p-3.5 rounded-2xl flex flex-col gap-3">
+    <div className="glass-panel p-3.5 rounded-2xl flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-cyan-400" />
           <h4 className="font-heading font-bold text-xs uppercase tracking-wider text-slate-200">
-            Trình mô phỏng comment livestream
+            Mô phỏng tương tác livestream
           </h4>
         </div>
 
-        {/* Auto bot toggle */}
         <button
           onClick={toggleBotSimulation}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all shadow-md ${
@@ -73,7 +67,7 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({ liveAdapter 
         >
           {isBotRunning ? (
             <>
-              <Square className="w-3 h-3 fill-current" /> Dừng Bot Tự Động
+              <Square className="w-3 h-3 fill-current" /> Dừng Bot
             </>
           ) : (
             <>
@@ -96,41 +90,81 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({ liveAdapter 
         />
       </div>
 
-      {/* Quick Command Buttons */}
+      {/* Primary Gameplay Commands */}
       <div>
-        <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1.5 block">
-          Lệnh nhanh (Click để gửi):
+        <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1 block">
+          Lệnh hành động & kinh tế:
         </span>
-        <div className="grid grid-cols-5 gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
           <button
             onClick={() => handleSendCommand('VÀO')}
-            className="px-2 py-2 rounded-xl bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/40 text-cyan-200 font-bold text-xs transition-all hover:scale-105 active:scale-95 text-center shadow"
+            className="px-2 py-1.5 rounded-xl bg-cyan-600/30 hover:bg-cyan-600/50 border border-cyan-500/40 text-cyan-200 font-bold text-xs transition-all active:scale-95 text-center"
           >
             VÀO
           </button>
           <button
             onClick={() => handleSendCommand('GỖ')}
-            className="px-2 py-2 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-200 font-bold text-xs transition-all hover:scale-105 active:scale-95 text-center shadow"
+            className="px-2 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-200 font-bold text-xs transition-all active:scale-95 text-center"
           >
-            GỖ
+            GỖ 🪵
           </button>
           <button
             onClick={() => handleSendCommand('ĐÁ')}
-            className="px-2 py-2 rounded-xl bg-sky-600/30 hover:bg-sky-600/50 border border-sky-500/40 text-sky-200 font-bold text-xs transition-all hover:scale-105 active:scale-95 text-center shadow"
+            className="px-2 py-1.5 rounded-xl bg-sky-600/30 hover:bg-sky-600/50 border border-sky-500/40 text-sky-200 font-bold text-xs transition-all active:scale-95 text-center"
           >
-            ĐÁ
+            ĐÁ 🪨
+          </button>
+          <button
+            onClick={() => handleSendCommand('LƯƠNG THỰC')}
+            className="px-2 py-1.5 rounded-xl bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-rose-200 font-bold text-xs transition-all active:scale-95 text-center"
+          >
+            LƯƠNG THỰC 🌾
           </button>
           <button
             onClick={() => handleSendCommand('XÂY')}
-            className="px-2 py-2 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-amber-200 font-bold text-xs transition-all hover:scale-105 active:scale-95 text-center shadow"
+            className="px-2 py-1.5 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/40 text-amber-200 font-bold text-xs transition-all active:scale-95 text-center"
           >
-            XÂY
+            XÂY 🔨
           </button>
           <button
             onClick={() => handleSendCommand('KHÁM PHÁ')}
-            className="px-1.5 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 font-bold text-[11px] transition-all hover:scale-105 active:scale-95 text-center shadow"
+            className="px-2 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 font-bold text-xs transition-all active:scale-95 text-center"
           >
-            KHÁM PHÁ
+            KHÁM PHÁ 🧭
+          </button>
+        </div>
+
+        {/* Community Vote, Trade & Social Actions */}
+        <div className="grid grid-cols-5 gap-1 mt-1.5">
+          <button
+            onClick={() => handleSendCommand('VOTE 1')}
+            className="px-1.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-bold text-[10px] text-center"
+          >
+            VOTE 1
+          </button>
+          <button
+            onClick={() => handleSendCommand('VOTE 2')}
+            className="px-1.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-bold text-[10px] text-center"
+          >
+            VOTE 2
+          </button>
+          <button
+            onClick={() => handleSendCommand('ĐỔI VÀNG')}
+            className="px-1.5 py-1 rounded-lg bg-amber-950/60 hover:bg-amber-900/60 border border-amber-600/40 text-amber-300 font-bold text-[10px] text-center"
+          >
+            ĐỔI VÀNG
+          </button>
+          <button
+            onClick={() => client.sendGift('Pháo Hoa', userName, 1)}
+            className="px-1.5 py-1 rounded-lg bg-pink-950/60 hover:bg-pink-900/60 border border-pink-600/40 text-pink-300 font-bold text-[10px] flex items-center justify-center gap-0.5"
+          >
+            <Gift className="w-2.5 h-2.5" /> Quà
+          </button>
+          <button
+            onClick={() => client.sendLike(userName, 15)}
+            className="px-1.5 py-1 rounded-lg bg-rose-950/60 hover:bg-rose-900/60 border border-rose-600/40 text-rose-300 font-bold text-[10px] flex items-center justify-center gap-0.5"
+          >
+            <Heart className="w-2.5 h-2.5" /> Tim
           </button>
         </div>
       </div>
@@ -141,7 +175,7 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({ liveAdapter 
           type="text"
           value={customComment}
           onChange={(e) => setCustomComment(e.target.value)}
-          placeholder="Nhập comment tùy ý (ví dụ: !xay, chat go, !vao)..."
+          placeholder="Nhập comment (vd: !xay, vote 1, chat go)..."
           className="flex-1 bg-slate-900/90 border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-500/80"
         />
         <button
@@ -152,19 +186,19 @@ export const CommentSimulator: React.FC<CommentSimulatorProps> = ({ liveAdapter 
         </button>
       </form>
 
-      {/* Engineering Stress & Spam Test Buttons */}
-      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
-        <span className="text-slate-400 font-medium">Kiểm thử kỹ thuật:</span>
+      {/* Stress & Spam Test Buttons */}
+      <div className="pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+        <span className="text-slate-400 font-medium">Kiểm thử hệ thống:</span>
         <div className="flex gap-2">
           <button
             onClick={handleBurstTest}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-900/40 hover:bg-indigo-900/70 text-indigo-300 border border-indigo-700/50 transition-all font-semibold"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-900/40 hover:bg-indigo-900/70 text-indigo-300 border border-indigo-700/50 transition-all font-semibold"
           >
             <Zap className="w-3 h-3 text-indigo-400" /> Burst 5 Users
           </button>
           <button
             onClick={handleSpamTest}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-950/70 text-rose-300 border border-rose-700/50 transition-all font-semibold"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-950/70 text-rose-300 border border-rose-700/50 transition-all font-semibold"
           >
             <ShieldAlert className="w-3 h-3 text-rose-400" /> Test Spam
           </button>
