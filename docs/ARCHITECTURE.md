@@ -1,101 +1,67 @@
-# LIVE CITY — KIẾN TRÚC KỸ THUẬT (ARCHITECTURE SPECIFICATION)
-## Phase 00: Foundation & Project Engineering
+# LIVE CITY — KIẾN TRÚC HỆ THỐNG (ARCHITECTURE SPECIFICATION)
 
-Tài liệu này mô tả chi tiết kiến trúc của **LIVE CITY** — tựa game tương tác livestream mô phỏng thế giới ảo, nơi khán giả điều khiển cư dân, khai thác tài nguyên và cùng nhau xây dựng thành phố thông qua bình luận trực tiếp.
-
----
-
-## 1. NGUYÊN TẮC THIẾT KẾ CỐT LÕI (CORE PRINCIPLES)
-
-1. **Decoupled Game Engine & UI**:
-   - Toàn bộ logic trò chơi (`WorldState`, `CitizenSystem`, `ResourceSystem`, `BuildingSystem`) hoàn toàn độc lập với React và PixiJS.
-   - Trò chơi có thể chạy ở chế độ headless (không cần giao diện), phục vụ kiểm thử đơn vị hoặc chuyển đổi sang backend server trong tương lai mà không phải sửa logic game.
-
-2. **Decoupled Live Event Adapter**:
-   - `GameEngine` không phụ thuộc vào bất kỳ nhà cung cấp livestream cụ thể nào (TikTok Live, YouTube Live, Twitch).
-   - Mọi luồng sự kiện bên ngoài đi qua interface trừu tượng `ILiveEventAdapter`.
-   - Trong Phase 00, hệ thống sử dụng `MockLiveAdapter` hỗ trợ cả việc gõ lệnh thủ công lẫn chạy bot khán giả tự động với độ ngẫu nhiên thực tế.
-
-3. **Bảo vệ bất biến (Invariant Protection)**:
-   - Tài nguyên không bao giờ âm (`worldState.consumeResource` từ chối nếu không đủ tài nguyên).
-   - Sức chứa kho được tôn trọng nghiêm ngặt (không vượt quá giới hạn lưu trữ tối đa).
-   - Công trình chỉ chuyển sang trạng thái hoàn thành (`active`) khi điểm tiến độ đạt đủ `requiredProgress`.
-
-4. **Chống Spam & Chống Trùng Lặp (Anti-spam & Idempotency)**:
-   - **Deduplicator**: Bộ đệm trượt TTL (Time-To-Live) chặn các event trùng ID được gửi lại.
-   - **RateLimiter**: Giới hạn tốc độ per-user (cooldown 1.5s) kèm thông báo trực quan tới người xem.
-
-5. **Nghệ thuật Cozy Isometric Thuần Code (Zero Stock Assets)**:
-   - Mọi gạch nền (cỏ, nước dập dềnh, đường đá, quảng trường), cây cối, tảng đá, công trình và nhân vật cư dân đều được render bằng thuật toán đồ họa vector/isometric PixiJS 2.5D.
-   - Hiệu ứng âm thanh procedural tổng hợp trực tiếp bằng Web Audio API không phụ thuộc tệp âm thanh bên ngoài.
+Tài liệu này mô tả kiến trúc hoàn chỉnh của **LIVE CITY** sau khi nâng cấp từ bản Prototype (Phase 00) lên hệ thống **Stream-Ready Interactive City Runtime** (P0 → P5).
 
 ---
 
-## 2. PHÂN TẦNG HỆ THỐNG (SYSTEM LAYERS)
+## 1. SO SÁNH KIẾN TRÚC TRƯỚC VÀ SAU NÂNG CẤP
+
+| Thành phần | Trước nâng cấp (Phase 00) | Sau nâng cấp (Stream-Ready Runtime) |
+| :--- | :--- | :--- |
+| **Nguồn trạng thái (Source of Truth)** | Chạy cục bộ trong từng tab trình duyệt (`LocalStorage`). Mở 2 tab sẽ sinh ra 2 thế giới lệch nhau. | **Local Node.js Game Server (`127.0.0.1`)** chạy `GameEngine` ở chế độ headless. Mọi màn hình dùng chung 1 trạng thái duy nhất. |
+| **Đồng bộ OBS & Dashboard** | Chung 1 màn hình, chưa có route `/stage` độc lập cho OBS. | Tách biệt **Operator Dashboard (`/`)** và **OBS Stage (`/stage` — 1080×1920)** đồng bộ thời gian thực qua WebSocket `/ws`. |
+| **WorldState Notification** | `pushEvent()` không gọi `notify()`; các thao tác phức hợp gọi `notify()` lặp lại nhiều lần. | Giao dịch **`batch(fn)`** và cờ `isDirty`. Mọi thay đổi state và `pushEvent()` phát thông báo chính xác 1 lần sau mỗi transaction. |
+| **Máy trạng thái Cư dân (FSM)** | Lệnh mới ghi đè ngay khi đang vác hàng (`carrying_resource`), làm mất tài nguyên đang mang. | **Bảo toàn Cargo tuyệt đối**: Lệnh mới được xếp vào `queuedTask` và tự động thực thi ngay sau khi cư dân cất xong hàng vào kho. |
+| **Pathfinding** | A* dùng Manhattan cho 8 hướng và có fallback đi thẳng xuyên qua sông nước khi tắc đường. | A* với **Octile Heuristic** chuẩn 8 hướng, cấm cắt góc qua vật cản, trả về `[]` khi không có đường (tuyệt đối không đi xuyên nước). |
+| **Lưu trữ (Persistence)** | Snapshot v1 trên `LocalStorage`, mất `maxStorage` đã nâng cấp sau khi tải lại. | **Snapshot v2** + `FilePersistenceAdapter` (`.data/world_save.json` + `.backup.json`), hỗ trợ migrate từ v1, xác thực schema runtime. |
+| **PixiJS 8 Renderer** | Các layer tách rời khiến mọi citizen luôn đè lên mọi công trình; vẽ lại Graphics mỗi frame. | **Unified Depth Scene (`zIndex = (x+y)*100`)**, dirty flags cho địa hình/mỏ/công trình/cư dân, dùng chung `TextStyle`, giới hạn 60 active entities. |
+
+---
+
+## 2. SƠ ĐỒ PHÂN TẦNG KIẾN TRÚC (LAYERED ARCHITECTURE)
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│                     PRESENTATION LAYER                        │
-│  ┌─────────────────────────────┐ ┌──────────────────────────┐ │
-│  │   StreamStage (1080x1920)   │ │  Comment Simulator & UI  │ │
-│  │    PixiJS World Canvas      │ │  City Inspector & Ticker │ │
-│  └──────────────┬──────────────┘ └─────────────┬────────────┘ │
-└─────────────────┼──────────────────────────────┼──────────────┘
-                  │ Observer / Reactive Subscribe│
-┌─────────────────▼──────────────────────────────▼──────────────┐
-│                    LIVE CITY CORE ENGINE                      │
-│                                                               │
-│   ┌────────────────────────────────────────────────────────┐  │
-│   │                     Command Pipeline                   │  │
-│   │ [LiveComment] ➔ [Deduplicator] ➔ [CommandParser] ➔      │  │
-│   │               ➔ [RateLimiter] ➔ [CommandDispatcher]    │  │
-│   └────────────────────────────┬───────────────────────────┘  │
-│                                │                              │
-│   ┌────────────────────────────▼───────────────────────────┐  │
-│   │                      Domain Systems                    │  │
-│   │  • CitizenSystem (A* Pathfinding & Task FSM)           │  │
-│   │  • ResourceSystem (Node Regeneration & Depletion)      │  │
-│   │  • BuildingSystem (Blueprints & Construction)          │  │
-│   │  • AudioSystem (Web Audio API Procedural Synthesizer)  │  │
-│   └────────────────────────────┬───────────────────────────┘  │
-│                                │                              │
-│   ┌────────────────────────────▼───────────────────────────┐  │
-│   │                     WorldState                         │  │
-│   │  • TileMap (22x22 Isometric Grid)                      │  │
-│   │  • Resources & Caps                                    │  │
-│   │  • Citizens Map & Event Log                            │  │
-│   └────────────────────────────┬───────────────────────────┘  │
-└────────────────────────────────┼──────────────────────────────┘
-                                 │
-┌────────────────────────────────▼──────────────────────────────┐
-│                      ADAPTERS LAYER                           │
-│   • MockLiveAdapter (Simulated comments & bot swarm)          │
-│   • LocalStoragePersistence (Snapshots & World Recovery)      │
-└───────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        PRESENTATION CLIENTS                             │
+│  ┌─────────────────────────────────┐  ┌───────────────────────────────┐ │
+│  │    Operator Dashboard (/)       │  │     OBS Browser Source        │ │
+│  │  • Quản lý dự án & Biểu quyết   │  │  • Route: /stage (1080x1920)  │ │
+│  │  • Phát động Sự kiện thành phố  │  │  • Tùy chọn ?bg=transparent   │ │
+│  │  • Comment Simulator & Live Cfg │  │  • Không có nút quản trị      │ │
+│  └────────────────┬────────────────┘  └───────────────┬───────────────┘ │
+│                   │     GameRuntimeClient (WS + HTTP) │                 │
+└───────────────────┼───────────────────────────────────┼─────────────────┘
+                    │        ws://127.0.0.1/ws          │
+┌───────────────────▼───────────────────────────────────▼─────────────────┐
+│                LOCAL NODE.JS GAME SERVER (127.0.0.1)                    │
+│  • Origin Verification (Loopback only) & Operator Session Token Auth    │
+│  • HTTP Control Endpoints (/api/status, /api/snapshot, /api/command...) │
+│  • RFC 6455 WebSocket Realtime Broadcaster & 15s Heartbeat              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                    HEADLESS CORE GAME ENGINE (DI)                       │
+│  • Command Pipeline: Deduplicator ➔ CommandParser ➔ RateLimiter         │
+│  • Domain Systems: CitizenSystem | ResourceSystem | BuildingSystem      │
+│  • WorldState: Transactional Batching, Invariants, Fog of War, Voting   │
+├───────────────────────────────────┬─────────────────────────────────────┤
+│        LIVE EVENT ADAPTERS        │        PERSISTENCE ADAPTERS         │
+│  • MockLiveAdapter (Offline/Test) │  • FilePersistenceAdapter (.data/)  │
+│  • TikTokLiveAdapter (Bridge/WS)  │  • LocalStoragePersistence          │
+└───────────────────────────────────┴─────────────────────────────────────┘
 ```
 
 ---
 
-## 3. CƠ CHẾ COMMAND VÀ TRẠNG THÁI CƯ DÂN (CITIZEN FSM)
+## 3. CÁC MODULE TRỌNG YẾU
 
-Mỗi cư dân trong thành phố đại diện cho một người xem livestream và hoạt động như một máy trạng thái hữu hạn (Finite State Machine):
-
-- **IDLE**: Cư dân đứng tại quảng trường trung tâm hoặc thỉnh thoảng đi dạo quanh thị trấn.
-- **MOVING_TO_HARVEST**: Tính đường đi ngắn nhất (A*) tới mỏ gỗ hoặc mỏ đá gần nhất.
-- **HARVESTING**: Đứng tại mỏ tài nguyên, đếm ngược chu kỳ khai thác và phát âm thanh đốn củi/đập đá.
-- **CARRYING_RESOURCE**: Vác bao gỗ/đá trên lưng, tìm đường trở về Tòa Thị Chính hoặc Kho Thóc để nộp.
-- **MOVING_TO_BUILD**: Di chuyển tới công trình đang trong dự án thi công.
-- **BUILDING**: Gõ búa xây dựng, tăng điểm tiến độ công trình cho đến khi hoàn thành.
-- **EXPLORING**: Tiến tới các vùng biên giới chưa khai phá, mở rộng tầm nhìn lãnh thổ và nhận điểm kinh nghiệm.
-
----
-
-## 4. CHI TIẾT TỌA ĐỘ VÀ CHIẾU ISOMETRIC (ISOMETRIC PROJECTION)
-
-- Tỷ lệ Isometric chuẩn: $2:1$ (Tile Width = 64px, Tile Height = 32px).
-- Công thức chuyển đổi từ lưới thế giới $(x, y)$ sang màn hình $(sx, sy)$:
-  $$sx = (x - y) \times \frac{\text{ISO\_TILE\_WIDTH}}{2}$$
-  $$sy = (x + y) \times \frac{\text{ISO\_TILE\_HEIGHT}}{2}$$
-- Sắp xếp độ sâu (Depth Sorting):
-  $$\text{zIndex} = x + y$$
-  Đảm bảo các thực thể ở phía trước luôn hiển thị đè lên các thực thể và địa hình ở phía sau một cách tự nhiên.
+1. **`src/core/state/WorldState.ts`**:
+   - Quản lý toàn bộ trạng thái thành phố, bất biến tài nguyên, bản đồ sương mù (`tile.discovered`), phiên biểu quyết (`activeVote`), sự kiện cộng đồng (`activeEvent`) và Snapshot v2.
+2. **`src/core/systems/CitizenSystem.ts`**:
+   - Điều khiển vòng đời cư dân, giới hạn số cư dân hoạt động (`activeCitizensCap`), cơ chế nghỉ ngơi khi không tương tác (`isResting`), hàng đợi nhiệm vụ bảo toàn cargo (`queuedTask`) và tìm đường A*.
+3. **`src/core/systems/BuildingSystem.ts`**:
+   - Kiểm tra cấp độ mở khóa (`unlockedAtLevel`), kiểm tra va chạm/mặt nước (`canPlaceBuilding`), tiêu thụ tài nguyên nguyên tử (`consumeResourcesAtomic`) và điều phối biểu quyết cộng đồng (`openVotingSession`, `castVote`, `closeVotingSession`).
+4. **`src/core/systems/ResourceSystem.ts`**:
+   - Tái tạo mỏ tài nguyên, chu kỳ kinh tế Thực phẩm & Vàng (Nông trại, Thương hội, tiêu thụ lương thực của cư dân đang làm việc), giao thương đổi Vàng (`tradeForGold`) và sự kiện thành phố (`startCityEvent`).
+5. **`src/server/GameServer.ts` & `src/server/wsProtocol.ts`**:
+   - Máy chủ Node.js gắn kết trực tiếp vào cổng `127.0.0.1`, cung cấp REST API và WebSocket đồng bộ trạng thái giữa Dashboard và OBS Stage.
+6. **`src/renderer/PixiWorldRenderer.ts`**:
+   - Bộ dựng hình Isometric 2.5D trên PixiJS 8 với sắp xếp độ sâu hợp nhất (`sceneObjectsContainer`), dirty flags, nội suy chuyển động 60 FPS và dọn dẹp bộ nhớ an toàn trong React StrictMode.

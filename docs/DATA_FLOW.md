@@ -1,104 +1,85 @@
 # LIVE CITY — SƠ ĐỒ LUỒNG DỮ LIỆU (DATA FLOW SPECIFICATION)
-## Phase 00: Foundation & Project Engineering
 
-Tài liệu này minh họa các luồng dữ liệu chính trong trò chơi LIVE CITY.
+Tài liệu này mô tả luồng dữ liệu thời gian thực giữa Khán giả Livestream, Local Game Server, Operator Dashboard (`/`) và OBS Stage (`/stage`).
 
 ---
 
-## 1. LUỒNG XỬ LÝ LỆNH TỪ BÌNH LUẬN KHÁN GIẢ (COMMENT PIPELINE)
+## 1. LUỒNG ĐỒNG BỘ REALTIME GIỮA SERVER, DASHBOARD VÀ OBS STAGE
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Viewer as Khán giả / Bot
-    participant Adapter as MockLiveAdapter
-    participant Dedupe as Deduplicator
-    participant Parser as CommandParser
-    participant Limiter as RateLimiter
-    participant Dispatcher as CommandDispatcher
-    participant CitizenSys as CitizenSystem
-    participant State as WorldState
-    participant Renderer as PixiWorldRenderer
-    participant UI as Stream Stage & HUD
+    actor Viewer as Khán giả / Simulator
+    participant Adapter as LiveAdapter (Mock / TikTok Bridge)
+    participant Server as Local Game Server (127.0.0.1)
+    participant Engine as Headless GameEngine
+    participant Disk as FilePersistence (.data/)
+    participant Dashboard as Operator Dashboard (/)
+    participant OBS as OBS Stage (/stage)
 
-    Viewer->>Adapter: Gửi bình luận ("GỖ", "XÂY", "!vao", ...)
-    Adapter->>Dispatcher: Chuyển giao RawLiveComment(id, userId, comment)
-    Dispatcher->>Dedupe: isUnique(comment.id)
-    alt Trùng lặp event
-        Dedupe-->>Dispatcher: false
-        Dispatcher-->>UI: Bỏ qua (ignored_duplicate)
-    else Event mới
-        Dedupe-->>Dispatcher: true
-        Dispatcher->>Parser: parse(rawComment)
-        alt Sai cú pháp
-            Parser-->>Dispatcher: null
-            Dispatcher->>State: pushEvent("command_rejected", "Lệnh không hợp lệ")
-        else Lệnh hợp lệ
-            Parser-->>Dispatcher: ParsedCommand(action, userId)
-            Dispatcher->>Limiter: checkAndRecord(userId)
-            alt Bị giới hạn tốc độ (Cooldown)
-                Limiter-->>Dispatcher: { allowed: false, remainingMs }
-                Dispatcher->>State: pushEvent("command_rejected", "Chờ cooldown")
-            else Cho phép
-                Limiter-->>Dispatcher: { allowed: true }
-                Dispatcher->>CitizenSys: Điều phối lệnh (JOIN / HARVEST / BUILD / EXPLORE)
-                CitizenSys->>State: Cập nhật mục tiêu, đường đi A* & trạng thái
-                State->>Renderer: Đồng bộ thực thể & hoạt ảnh
-                State->>UI: Kích hoạt Notify Subscriber cập nhật HUD
-            end
-        end
-    end
+    OBS->>Server: Kết nối WebSocket (ws://127.0.0.1/ws)
+    Server-->>OBS: Gửi Initial Snapshot v2 + LiveConnectionState
+    Dashboard->>Server: Kết nối WebSocket + Lấy Session Token (/api/auth/session)
+    Server-->>Dashboard: Gửi Initial Snapshot v2 + Operator Token
+
+    Viewer->>Adapter: Bình luận ("GỖ", "XÂY", "VOTE 1", "KHÁM PHÁ")
+    Adapter->>Engine: Chuẩn hóa RawLiveComment (Chống Replay & Duplicate)
+    Engine->>Engine: CommandParser ➔ RateLimiter (User + Global) ➔ Domain System
+    Engine->>Server: WorldState.batch() hoàn tất ➔ Kích hoạt State Listener
+    Server-->>OBS: Broadcast state_sync qua WebSocket
+    Server-->>Dashboard: Broadcast state_sync qua WebSocket
+    Engine->>Disk: Auto-save Snapshot v2 (kèm bản sao lưu .backup.json)
 ```
 
 ---
 
-## 2. VÒNG LẶP CHÍNH CỦA GAME ENGINE (GAME TICK LOOP)
+## 2. LUỒNG BẢO TOÀN CARGO VÀ HÀNG ĐỢI NHIỆM VỤ CƯ DÂN
 
 ```mermaid
-flowchart TD
-    A[Tick Engine: requestAnimationFrame] --> B[Tính Delta Time]
-    B --> C[Cập nhật chu kỳ Ngày/Đêm]
-    C --> D[CitizenSystem.update: Di chuyển A* & Máy trạng thái]
-    D --> E[ResourceSystem.update: Hồi sinh mỏ cạn kiệt]
-    E --> F[BuildingSystem.update: Quản lý công trường]
-    F --> G[Kiểm tra Auto-save định kỳ 30s]
-    G --> H[WorldState.notify: Cập nhật Observers]
-    H --> I[PixiWorldRenderer: Render Frame Đồ họa Isometric]
-    H --> J[React HUD: Cập nhật số liệu tài nguyên & Ticker]
-    I --> A
-```
-
----
-
-## 3. LUỒNG TƯƠNG TÁC ĐÓNG GÓP XÂY DỰNG NHIỀU NGƯỜI (COLLABORATIVE BUILDING)
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor UserA as Cư dân A
-    actor UserB as Cư dân B
-    participant System as CitizenSystem
-    participant State as WorldState
-    participant Audio as AudioSystem
-    participant Stage as Stream View
-
-    Note over UserA,UserB: Cả 2 cùng gõ lệnh "XÂY"
-    UserA->>System: assignBuild(cư dân A)
-    UserB->>System: assignBuild(cư dân B)
-    System->>State: Tìm công trình [Tháp Canh Hoàng Hôn]
-    System-->>Stage: 2 cư dân di chuyển đến công trường (A* Pathfinding)
+stateDiagram-v2
+    [*] --> idle: Gia nhập (VÀO)
+    idle --> moving_to_harvest: Lệnh GỖ / ĐÁ / LƯƠNG THỰC
+    moving_to_harvest --> harvesting: Tới mỏ tài nguyên
+    harvesting --> carrying_resource: Thu hoạch xong (Có carriedResource)
     
-    loop Mỗi chu kỳ xây dựng
-        System->>State: applyBuildProgress(+5 pt, UserA)
-        System->>Audio: playBuildSound()
-        System->>State: applyBuildProgress(+5 pt, UserB)
-        System->>Audio: playBuildSound()
-        State-->>Stage: Thanh tiến độ xây dựng tăng dần trên màn hình
+    carrying_resource --> carrying_resource: Nhận lệnh mới (XÂY / KHÁM PHÁ) ➔ Lưu vào queuedTask (KHÔNG HỦY CARGO)
+    carrying_resource --> idle: Tới kho ➔ Nộp tài nguyên vào WorldState
+    
+    idle --> moving_to_build: Tự động lấy queuedTask = build (hoặc lệnh XÂY)
+    moving_to_build --> building: Tới công trường
+    building --> idle: Công trình hoàn thành (100%)
+    
+    idle --> exploring: Tự động lấy queuedTask = explore (hoặc lệnh KHÁM PHÁ)
+    exploring --> idle: Mở vùng Fog of War & phát hiện mỏ mới
+```
+
+---
+
+## 3. LUỒNG BIỂU QUYẾT DỰ ÁN CỘNG ĐỒNG (COMMUNITY VOTING FLOW)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Operator as Người vận hành (Dashboard)
+    actor Viewers as Khán giả Livestream
+    participant Server as GameServer / BuildingSystem
+    participant State as WorldState
+    participant Stage as OBS Stage (/stage)
+
+    Operator->>Server: POST /api/control/vote { action: "open", durationSeconds: 90 }
+    Server->>State: Khởi tạo VotingSession với 3 công trình đã mở khóa
+    State-->>Stage: Hiển thị bảng bình chọn (VOTE 1, VOTE 2, VOTE 3) trên HUD
+
+    loop Trong thời gian mở bình chọn
+        Viewers->>Server: Bình luận "VOTE 1", "BÌNH CHỌN 2"
+        Server->>Server: Kiểm tra mỗi userId chỉ có 1 phiếu duy nhất
+        Server->>State: Cộng phiếu & cập nhật tỷ lệ bình chọn trực tiếp
+        State-->>Stage: Cập nhật số phiếu thời gian thực
     end
 
-    alt Tiến độ đạt 100%
-        State->>State: Chuyển trạng thái sang "ACTIVE"
-        State->>Audio: playCompleteSound()
-        State->>Stage: Bắn pháo hoa ăn mừng & cộng EXP thành phố
+    alt Hết thời gian hoặc Operator bấm Chốt Phiếu
+        Server->>State: Đóng phiên vote, lưu vào voteHistory, chọn công trình nhiều phiếu nhất
+        Server->>State: Kiểm tra tài nguyên & vị trí ➔ Khởi công dự án thắng cuộc
+        State-->>Stage: Hiển thị giàn giáo công trình mới để cư dân gõ XÂY
     end
 ```

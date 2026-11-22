@@ -1,9 +1,6 @@
-# LIVE CITY — Interactive Livestream Simulation Game
-## Phase 00: Foundation & Project Engineering
+# LIVE CITY — Stream-Ready Interactive 2.5D Isometric City Game
 
-**LIVE CITY** là một trò chơi tương tác livestream thời gian thực nơi khán giả điều khiển cư dân, khai thác tài nguyên, cùng nhau xây dựng các kỳ quan kiến trúc và khám phá một thành phố tồn tại lâu dài (persistent world).
-
-Dự án tuân thủ nghiêm ngặt nguyên tắc: **Game Engine tách rời hoàn toàn khỏi UI và tách rời khỏi API livestream cụ thể.**
+**LIVE CITY** là một trò chơi thành phố isometric 2.5D tương tác trực tiếp với livestream. Khán giả sử dụng bình luận để tạo cư dân riêng, khai thác tài nguyên (Gỗ, Đá, Thực phẩm, Vàng), vận chuyển hàng về kho, tham gia thi công các công trình, biểu quyết dự án tiếp theo và mở rộng bản đồ sương mù (Fog of War) trong một thế giới tồn tại lâu dài qua nhiều buổi phát sóng.
 
 ---
 
@@ -17,117 +14,67 @@ Dự án tuân thủ nghiêm ngặt nguyên tắc: **Game Engine tách rời ho�
 ## 🚀 HƯỚNG DẪN CÀI ĐẶT VÀ KHỞI CHẠY (QUICK START)
 
 ### 1. Yêu cầu môi trường
-- **Node.js**: v18.0.0 trở lên (khuyến nghị v20+)
-- **NPM**: v9.0.0 trở lên
+- **Node.js**: v22.x trở lên (khuyến nghị Node 22 LTS hoặc Node 24)
+- **NPM**: v10+
 
 ### 2. Cài đặt Dependencies
 ```bash
 npm install
 ```
 
-### 3. Khởi chạy môi trường phát triển (Dev Server)
+### 3. Khởi chạy Local Game Server & Giao diện (Dev Mode)
 ```bash
 npm run dev
 ```
-Truy cập trình duyệt tại địa chỉ: `http://localhost:3000` (hoặc cổng hiển thị trong terminal).
+Lệnh này tự động khởi chạy **Authoritative Local Game Server** gắn trên `127.0.0.1:3000` cùng giao diện Web:
+- **Operator Dashboard (Màn hình điều khiển):** `http://127.0.0.1:3000/`
+- **OBS Browser Source Stage (Màn hình sân khấu 1080×1920):** `http://127.0.0.1:3000/stage`
+- **OBS Stage nền trong suốt:** `http://127.0.0.1:3000/stage?bg=transparent`
 
-### 4. Chạy toàn bộ Unit Tests
+### 4. Các lệnh kiểm tra chất lượng & vận hành
 ```bash
+# Kiểm tra kiểu tĩnh TypeScript (Strict Mode)
+npm run typecheck
+
+# Chạy Linter kiểm tra mã nguồn
+npm run lint
+
+# Chạy toàn bộ 13 bộ Unit & Integration Tests (49 test cases)
 npm test
-```
 
-### 5. Build dự án cho Production
-```bash
+# Build bản Production và chạy máy chủ Preview (trên 127.0.0.1:4173)
 npm run build
 npm run preview
+
+# Hoặc chạy riêng Headless Node.js Game Server độc lập (trên 127.0.0.1:4000)
+npm run server
 ```
 
 ---
 
-## 🎮 CÁCH TƯƠNG TÁC QUA COMMENT SIMULATOR
+## 🎮 TẬP LỆNH TƯƠNG TÁC CHO KHÁN GIẢ LIVESTREAM
 
-Tại giao diện bên phải màn hình (hoặc bảng điều khiển), bạn có thể nhập tên người xem và thử nghiệm các lệnh sau:
-
-| Lệnh | Ý nghĩa | Hành động của Cư dân |
+| Lệnh bình luận | Alias hỗ trợ | Hành động trong thế giới LIVE CITY |
 | :--- | :--- | :--- |
-| **`VÀO`** (hoặc `!vao`, `join`) | Gia nhập thành phố | Tạo cư dân đại diện xuất hiện tại Quảng trường trung tâm |
-| **`GỖ`** (hoặc `!go`, `chặt gỗ`) | Khai thác gỗ | Tìm cây sồi/thông gần nhất, đốn củi và vác về kho thành phố |
-| **`ĐÁ`** (hoặc `!da`, `khai thác đá`) | Khai thác đá | Tìm mỏ đá hoa cương, đập đá và vận chuyển về kho |
-| **`XÂY`** (hoặc `!xay`, `xây nhà`) | Đóng góp xây dựng | Di chuyển đến công trình đang thi công (ví dụ: *Tháp Canh Hoàng Hôn*) để gõ búa tăng tiến độ |
-| **`KHÁM PHÁ`** (hoặc `kham pha`, `!explore`) | Mở rộng lãnh thổ | Thám hiểm các vùng đất biên giới, mở bản đồ và nhận thưởng EXP |
+| **`VÀO`** | `!vao`, `join`, `tham gia` | Tạo cư dân riêng xuất hiện tại Quảng trường trung tâm. |
+| **`GỖ`** | `!go`, `wood`, `chặt gỗ` | Di chuyển A* tới rừng đốn củi và vác về kho thành phố. |
+| **`ĐÁ`** | `!da`, `stone`, `đào đá` | Di chuyển tới mỏ đá hoa cương/pha lê để khai thác. |
+| **`LƯƠNG THỰC`** | `thực phẩm`, `food`, `hái quả` | Thu hoạch vườn quả mọng cung cấp lương thực nuôi cư dân. |
+| **`XÂY`** | `!xay`, `build`, `xây nhà` | Di chuyển tới công trường đang mở để gõ búa tăng tiến độ. |
+| **`KHÁM PHÁ`** | `!explore`, `thám hiểm` | Tiến vào vùng sương mù (Fog of War), mở sáng bản đồ và tìm mỏ ẩn. |
+| **`VOTE 1..3`** | `bình chọn 1`, `bầu 2` | Bỏ phiếu bầu chọn công trình xây dựng tiếp theo (mỗi người 1 phiếu). |
+| **`ĐỔI VÀNG`** | `giao thương`, `trade` | Đổi 20 Gỗ/Đá dư thừa trong kho lấy Vàng tại Thương Hội. |
+
+> **Đặc tính bảo toàn Cargo:** Nếu cư dân đang vác tài nguyên về kho (`carrying_resource`) mà người xem gõ lệnh mới, cư dân sẽ lưu lệnh mới vào hàng đợi cá nhân (`queuedTask`), hoàn tất việc nộp hàng vào kho rồi mới chuyển sang nhiệm vụ tiếp theo — tuyệt đối không bao giờ làm mất tài nguyên.
 
 ---
 
-## ⚙️ BỘ KIỂM THỬ KỸ THUẬT (ENGINEERING TESTS)
+## 📚 TÀI LIỆU KỸ THUẬT & VẬN HÀNH CHI TIẾT
 
-Dự án trang bị 9 bộ kiểm thử với 24 test cases hoàn chỉnh (`npm test`):
-
-1. **`citizen.test.ts`**: Tạo mới cư dân, chống trùng lặp ID, khởi tạo chỉ số ban đầu.
-2. **`harvesting.test.ts`**: Cơ chế khai thác gỗ và đá, chu kỳ thu hoạch và vận chuyển về kho.
-3. **`resources.test.ts`**: Bất biến không âm tài nguyên, tôn trọng giới hạn sức chứa kho lưu trữ.
-4. **`building.test.ts`**: Tiến độ xây dựng nhiều người đóng góp, bất biến hoàn thành công trình đúng ngưỡng.
-5. **`command-parser.test.ts`**: Xử lý ngữ nghĩa tiếng Việt có dấu/không dấu, tiền tố lệnh (`!`, `/`), từ chối comment rác.
-6. **`rate-limiter.test.ts`**: Giới hạn tốc độ gửi lệnh chống spam (cooldown per-user).
-7. **`deduplication.test.ts`**: Chống xử lý trùng lặp sự kiện (sliding window TTL cache).
-8. **`multi-user.test.ts`**: Kiểm tra nhiều người xem cùng tương tác đồng thời.
-9. **`persistence.test.ts`**: Xuất snapshot trạng thái thành phố và khôi phục nguyên vẹn.
-
----
-
-## 🏛️ CẤU TRÚC THƯ MỤC DỰ ÁN
-
-```
-live-city/
-├── src/
-│   ├── core/                      # Trái tim logic của trò chơi (hoàn toàn decoupled)
-│   │   ├── types/                 # Domain types & interfaces (World, Citizen, Resource, Event)
-│   │   ├── state/                 # Quản lý trạng thái thế giới (WorldState, Invariants, Initial Map)
-│   │   ├── systems/               # Các hệ thống nghiệp vụ (Citizen, Resource, Building, Audio)
-│   │   ├── commands/              # Pipeline xử lý lệnh (Parser, RateLimiter, Deduplicator, Dispatcher)
-│   │   ├── adapters/              # Giao tiếp ngoại vi (MockLiveAdapter, LocalStoragePersistence)
-│   │   ├── engine/                # Main game loop, tick delta time orchestrator (GameEngine)
-│   │   └── utils/                 # Math isometric, A* pathfinding, id generation
-│   ├── renderer/                  # Bộ hiển thị đồ họa Isometric 2.5D (PixiJS v8)
-│   │   ├── PixiWorldRenderer.ts   # Facade điều phối renderer và camera
-│   │   ├── IsometricGrid.ts       # Địa hình isometric (cỏ, nước dập dềnh, đường đá, quảng trường)
-│   │   ├── ResourceRenderer.ts    # Cây cối lay động trong gió, mỏ đá hoa cương
-│   │   ├── StructureRenderer.ts   # Tòa thị chính, kho thóc, giàn giáo thi công
-│   │   ├── EntityRenderer.ts      # Cư dân hoạt ảnh bước đi, vác tài nguyên, bóng đổ, name tag
-│   │   └── CameraController.ts    # Pan, zoom, focus trung tâm, phím điều hướng
-│   ├── ui/                        # Giao diện sân khấu livestream & điều khiển (React 19)
-│   │   ├── components/
-│   │   │   ├── StreamStage.tsx    # Khung chiếu livestream 9:16 hoặc toàn màn hình
-│   │   │   ├── StreamHUD.tsx      # Thanh trạng thái thành phố, cấp độ, thời tiết ngày/đêm
-│   │   │   ├── BuildingProgressBar.tsx # Tiến độ công trình đang thi công trực quan
-│   │   │   ├── LiveActivityFeed.tsx    # Dòng sự kiện thời gian thực (Ticker)
-│   │   │   ├── LeaderboardHUD.tsx      # Bảng vinh danh top thợ đốn củi, thợ mỏ, thợ xây
-│   │   │   ├── CommentSimulator.tsx    # Bảng mô phỏng comment, nút lệnh nhanh & bot tự động
-│   │   │   ├── CityInspector.tsx       # Chi tiết cư dân, công trình và tài nguyên
-│   │   │   └── ControlsToolbar.tsx     # Cụm phím điều khiển (Reset, Mute, Recenter, Save)
-│   │   └── App.tsx                # Ứng dụng gốc kết nối Engine với UI
-│   ├── test/                      # 9 Test suites kiểm thử tự động với Vitest
-│   └── main.tsx                   # Điểm khởi động ứng dụng web
-├── docs/
-│   ├── ARCHITECTURE.md            # Tài liệu kiến trúc chuyên sâu
-│   └── DATA_FLOW.md               # Sơ đồ luồng dữ liệu (Mermaid)
-├── index.html
-├── vite.config.ts
-├── tsconfig.json
-└── package.json
-```
-
----
-
-## 📦 DANH SÁCH DEPENDENCIES
-
-### Runtime Dependencies:
-- **`pixi.js` (^8.16.0)**: Công cụ dựng hình 2D WebGL/WebGPU hiệu năng cao cho thế giới isometric.
-- **`react` & `react-dom` (^19.2.4)**: Framework xây dựng giao diện lớp điều khiển và stream HUD.
-- **`lucide-react` (^1.16.0)**: Bộ icon trực quan sang trọng cho HUD và hệ thống bảng tin.
-- **`canvas-confetti` (^1.9.4)**: Hiệu ứng pháo hoa khi thành phố thăng cấp hoặc hoàn tất kỳ quan.
-
-### Dev & Testing Dependencies:
-- **`typescript` (^6.0.2)**: Đảm bảo kiểm tra kiểu tĩnh ở chế độ `strict`.
-- **`vite` (^8.3.8)**: Bộ bundler thế hệ mới với Hot Module Replacement siêu tốc.
-- **`vitest` (^4.1.2)**: Khung kiểm thử đơn vị hiện đại tương thích hoàn toàn với Vite ESM.
-- **`tailwindcss` (^4.3.5) & `@tailwindcss/vite`**: Hệ thống tạo kiểu tiện ích cho UI livestream cozy.
+- [docs/UPGRADE_AUDIT.md](./docs/UPGRADE_AUDIT.md) — Báo cáo rà soát lỗi Phase 00 và lộ trình nâng cấp P0 → P5.
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — Kiến trúc hệ thống Local Game Server, Headless Engine, DI và Unified Depth Renderer.
+- [docs/DATA_FLOW.md](./docs/DATA_FLOW.md) — Sơ đồ luồng dữ liệu WebSocket Realtime, FSM Cargo Queue và Biểu quyết cộng đồng.
+- [docs/GAMEPLAY.md](./docs/GAMEPLAY.md) — Cơ chế kinh tế 4 tài nguyên, bonus công trình, Fog of War, Voting và Sự kiện thành phố.
+- [docs/LOCAL_STREAM_SETUP.md](./docs/LOCAL_STREAM_SETUP.md) — Hướng dẫn thiết lập OBS Browser Source (`1080×1920`) và kết nối Livestream.
+- [docs/SECURITY.md](./docs/SECURITY.md) — Chính sách bảo mật Loopback `127.0.0.1`, Origin check, Operator Token và chống Spam/Replay.
+- [AGENTS.md](./AGENTS.md) — Quy chuẩn phát triển và đồng bộ GitHub bắt buộc.
