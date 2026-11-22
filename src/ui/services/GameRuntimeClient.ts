@@ -467,10 +467,11 @@ export class GameRuntimeClient {
   public async connectLiveAdapter(
     platform: 'mock' | 'tiktok_experimental',
     channelId?: string,
-    bridgeUrl?: string
+    bridgeUrl?: string,
+    requireAck?: boolean
   ): Promise<void> {
     if (this.fallbackEngine) return;
-    await this.postApi('/api/live/connect', { platform, channelId, bridgeUrl });
+    await this.postApi('/api/live/connect', { platform, channelId, bridgeUrl, requireAck });
   }
 
   public async disconnectLiveAdapter(): Promise<void> {

@@ -4,10 +4,107 @@ import {
   BridgeTransportConnectOptions,
 } from './TikTokLiveAdapter';
 
+export interface ValidateBridgeUrlOptions {
+  allowLoopback?: boolean;
+  allowedHosts?: string[];
+}
+
+export function isIpv4(host: string): boolean {
+  const parts = host.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((p) => {
+    if (!/^\d+$/.test(p)) return false;
+    const n = Number(p);
+    return n >= 0 && n <= 255;
+  });
+}
+
+export function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === 'localhost') return true;
+  if (h.startsWith('127.')) return true;
+  if (h === '::1' || h === '[::1]') return true;
+  if (
+    h === '::ffff:127.0.0.1' ||
+    h === '[::ffff:127.0.0.1]' ||
+    h === '[::ffff:7f00:1]' ||
+    h === '::ffff:7f00:1'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isForbiddenPrivateOrMetadataIpv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
+  const [a, b, c] = parts;
+  if (a === 0) return true; // 0.0.0.0/8
+  if (a === 10) return true; // 10.0.0.0/8
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10
+  if (a === 127) return true; // 127.0.0.0/8
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 192 && b === 0 && c === 2) return true; // 192.0.2.0/24
+  if (a === 198 && b === 51 && c === 100) return true; // 198.51.100.0/24
+  if (a === 203 && b === 0 && c === 113) return true; // 203.0.113.0/24
+  if (a >= 224) return true; // 224.0.0.0/4 (multicast & reserved)
+  return false;
+}
+
+export function isForbiddenPrivateOrMetadataIpv6(raw: string): boolean {
+  let ip = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
+  ip = ip.toLowerCase();
+  if (ip === '::1' || ip === '::') return true;
+  if (/^fe[89ab]/i.test(ip)) return true; // link-local fe80::/10
+  if (/^f[cd]/i.test(ip)) return true; // unique local fc00::/7
+  if (/^ff/i.test(ip)) return true; // multicast ff00::/8
+  if (ip.startsWith('::ffff:')) {
+    const sub = ip.slice(7);
+    if (sub.includes('.')) {
+      return isForbiddenPrivateOrMetadataIpv4(sub);
+    }
+    const hexParts = sub.split(':');
+    if (hexParts.length === 2) {
+      const p1 = parseInt(hexParts[0], 16);
+      const p2 = parseInt(hexParts[1], 16);
+      if (!isNaN(p1) && !isNaN(p2)) {
+        const b1 = (p1 >> 8) & 0xff;
+        const b2 = p1 & 0xff;
+        const b3 = (p2 >> 8) & 0xff;
+        const b4 = p2 & 0xff;
+        return isForbiddenPrivateOrMetadataIpv4(`${b1}.${b2}.${b3}.${b4}`);
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
 /**
- * Validates bridge URLs to ensure valid WebSocket protocol and protect against SSRF targets.
+ * Resolves DNS hostname dynamically in Node environment to detect private/loopback rebinding.
  */
-export function validateBridgeUrl(urlStr: string): {
+export async function resolveDnsHostnames(hostname: string): Promise<string[]> {
+  if (typeof process === 'undefined' || !process.versions?.node) {
+    return [];
+  }
+  try {
+    const dns = await import('node:dns');
+    const records = await dns.promises.lookup(hostname, { all: true });
+    return records.map((r) => r.address);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Synchronous URL and address structure validator.
+ */
+export function validateBridgeUrl(
+  urlStr: string,
+  options?: ValidateBridgeUrlOptions
+): {
   valid: boolean;
   normalized?: string;
   error?: string;
@@ -16,6 +113,13 @@ export function validateBridgeUrl(urlStr: string): {
     return { valid: false, error: 'Bridge URL is required and must be a valid string.' };
   }
   const trimmed = urlStr.trim();
+  if (trimmed.includes('#')) {
+    return {
+      valid: false,
+      error: "Bridge URL contains fragment ('#'), which is forbidden by RFC 6455.",
+    };
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(trimmed);
@@ -30,17 +134,130 @@ export function validateBridgeUrl(urlStr: string): {
     };
   }
 
+  if (parsed.username || parsed.password) {
+    return {
+      valid: false,
+      error: 'Bridge URL credentials (username/password) are forbidden for security reasons.',
+    };
+  }
+
+  if (parsed.port) {
+    const portNum = Number(parsed.port);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return { valid: false, error: 'Invalid port number: must be between 1 and 65535.' };
+    }
+  }
+
   const hostname = parsed.hostname.toLowerCase();
-  // Disallow cloud metadata and dangerous internal addresses
+  if (!hostname) {
+    return { valid: false, error: 'Bridge URL host is missing or invalid.' };
+  }
+
+  // Explicit cloud metadata and forbidden hostnames
   if (
     hostname === '169.254.169.254' ||
+    hostname === '169.254.169.253' ||
     hostname === 'metadata.google.internal' ||
     hostname === '0.0.0.0'
   ) {
     return { valid: false, error: 'Target host is blocked for security reasons.' };
   }
 
+  // Local loopback policy
+  if (isLoopbackHost(hostname)) {
+    if (options?.allowLoopback === false) {
+      return { valid: false, error: 'Loopback bridge address is not permitted by policy.' };
+    }
+    return { valid: true, normalized: parsed.toString() };
+  }
+
+  // Non-loopback targets: check raw IPv4
+  if (isIpv4(hostname)) {
+    if (isForbiddenPrivateOrMetadataIpv4(hostname)) {
+      return {
+        valid: false,
+        error: 'Target IP address is in a private, link-local, or metadata address range.',
+      };
+    }
+  } else if (hostname.startsWith('[') || hostname.includes(':')) {
+    // Non-loopback raw IPv6
+    if (isForbiddenPrivateOrMetadataIpv6(hostname)) {
+      return {
+        valid: false,
+        error: 'Target IPv6 address is in a private, link-local, or metadata address range.',
+      };
+    }
+  } else {
+    // Internal domain suffix defense
+    if (
+      hostname.endsWith('.internal') ||
+      hostname.endsWith('.local') ||
+      hostname.endsWith('.localhost')
+    ) {
+      return {
+        valid: false,
+        error: 'Internal domain names are blocked for security reasons.',
+      };
+    }
+
+    // Remote host allowlist check if configured
+    if (options?.allowedHosts && options.allowedHosts.length > 0) {
+      const allowed = options.allowedHosts.map((h) => h.toLowerCase());
+      if (!allowed.includes(hostname)) {
+        return {
+          valid: false,
+          error: `Target host "${hostname}" is not in allowed bridge hosts list.`,
+        };
+      }
+    }
+  }
+
   return { valid: true, normalized: parsed.toString() };
+}
+
+/**
+ * Asynchronous validator with DNS pre-flight check to mitigate SSRF & DNS rebinding.
+ */
+export async function validateBridgeUrlAsync(
+  urlStr: string,
+  options?: ValidateBridgeUrlOptions
+): Promise<{
+  valid: boolean;
+  normalized?: string;
+  error?: string;
+}> {
+  const syncResult = validateBridgeUrl(urlStr, options);
+  if (!syncResult.valid || !syncResult.normalized) {
+    return syncResult;
+  }
+
+  try {
+    const parsed = new URL(syncResult.normalized);
+    const hostname = parsed.hostname.toLowerCase();
+
+    // If not a raw IP and not localhost loopback, check resolved DNS addresses
+    if (!isIpv4(hostname) && !hostname.startsWith('[') && hostname !== 'localhost') {
+      const resolvedAddresses = await resolveDnsHostnames(hostname);
+      for (const addr of resolvedAddresses) {
+        if (isIpv4(addr) && (isForbiddenPrivateOrMetadataIpv4(addr) || addr.startsWith('127.'))) {
+          return {
+            valid: false,
+            error: `Target domain "${hostname}" resolves to forbidden IP address: ${addr}`,
+          };
+        }
+        if (isForbiddenPrivateOrMetadataIpv6(addr) || addr === '::1') {
+          return {
+            valid: false,
+            error: `Target domain "${hostname}" resolves to forbidden IPv6 address: ${addr}`,
+          };
+        }
+      }
+    }
+  } catch {
+    // If URL parsing fails in async phase, syncResult already caught it
+  }
+
+  return syncResult;
 }
 
 /**
@@ -91,7 +308,10 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
     this.activeChannelId = String(channelId || '').trim();
 
     // 3. Validate bridge URL
-    const validation = validateBridgeUrl(bridgeUrl);
+    const validation = await validateBridgeUrlAsync(bridgeUrl, {
+      allowLoopback: options?.allowLoopback ?? true,
+      allowedHosts: options?.allowedHosts,
+    });
     if (!validation.valid || !validation.normalized) {
       throw new Error(validation.error || 'Invalid bridge URL');
     }
@@ -213,22 +433,31 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
             const text = typeof rawData === 'string' ? rawData : rawData.toString('utf-8');
             const parsed = JSON.parse(text);
 
-            // 1. Check for Handshake ACK / Connected control frame
-            if (this.isAckControlFrame(parsed)) {
-              this.isSubscribed = true;
-              safeResolve();
-              return;
-            }
-
-            // 2. Check for Bridge Error control frame
-            if (this.isErrorControlFrame(parsed)) {
-              const errMsg =
-                parsed.message ||
-                parsed.error ||
-                (parsed.data && parsed.data.error) ||
-                'Bridge returned error response';
-              if (!settled) {
-                safeReject(new Error(errMsg));
+            // 1. Evaluate control frames strictly
+            const ctrl = this.evaluateControlFrame(parsed);
+            if (ctrl.isControl) {
+              if (ctrl.isError) {
+                const errMsg = ctrl.errorReason || 'Bridge returned error response';
+                if (!settled) {
+                  try {
+                    socket.close();
+                  } catch {
+                    // ignore
+                  }
+                  safeReject(new Error(errMsg));
+                  return;
+                }
+              } else if (ctrl.isPositiveAck) {
+                this.isSubscribed = true;
+                safeResolve();
+                return;
+              } else if (ctrl.isSocketConnectedOnly) {
+                this.isConnected = true;
+                if (!requireAck) {
+                  setTimeout(() => {
+                    safeResolve();
+                  }, 100);
+                }
                 return;
               }
             }
@@ -305,42 +534,106 @@ export class WebSocketBridgeTransport implements ILiveBridgeTransport {
     }
   }
 
-  private isAckControlFrame(parsed: any): boolean {
-    if (!parsed || typeof parsed !== 'object') return false;
+  private evaluateControlFrame(parsed: any): {
+    isControl: boolean;
+    isError: boolean;
+    isPositiveAck: boolean;
+    isSocketConnectedOnly: boolean;
+    errorReason?: string;
+  } {
+    if (!parsed || typeof parsed !== 'object') {
+      return { isControl: false, isError: false, isPositiveAck: false, isSocketConnectedOnly: false };
+    }
 
-    if (
-      parsed.action === 'ack' ||
+    const norm = (val: unknown): string =>
+      String(val || '')
+        .replace(/^@/, '')
+        .toLowerCase()
+        .trim();
+
+    // A. Check for error frames or error status
+    const isError =
+      parsed.status === 'error' ||
+      parsed.event === 'error' ||
+      parsed.type === 'error' ||
+      (parsed.action === 'ack' && parsed.status === 'error') ||
+      Boolean(parsed.error && typeof parsed.error === 'string');
+
+    if (isError) {
+      const errorReason =
+        parsed.message ||
+        parsed.error ||
+        (parsed.data && parsed.data.error) ||
+        'Bridge returned error response';
+      return {
+        isControl: true,
+        isError: true,
+        isPositiveAck: false,
+        isSocketConnectedOnly: false,
+        errorReason,
+      };
+    }
+
+    // B. Check for subscription ACK candidate
+    const isAckCandidate =
+      (parsed.action === 'ack' &&
+        ['subscribed', 'ok', 'success'].includes(String(parsed.status || '').toLowerCase())) ||
       parsed.action === 'subscribed' ||
-      parsed.type === 'ack' ||
-      parsed.type === 'connected' ||
+      (parsed.type === 'ack' &&
+        ['subscribed', 'ok', 'success'].includes(String(parsed.status || '').toLowerCase())) ||
       parsed.event === 'subscribed' ||
-      parsed.event === 'connected'
-    ) {
-      return true;
+      parsed.status === 'subscribed';
+
+    if (isAckCandidate) {
+      const channelInFrame =
+        parsed.channelId ??
+        parsed.channel ??
+        parsed.uniqueId ??
+        parsed.data?.channelId ??
+        parsed.data?.uniqueId;
+
+      if (channelInFrame) {
+        const expectedNorm = norm(this.activeChannelId);
+        const receivedNorm = norm(channelInFrame);
+        if (expectedNorm && receivedNorm && expectedNorm !== receivedNorm) {
+          return {
+            isControl: true,
+            isError: true,
+            isPositiveAck: false,
+            isSocketConnectedOnly: false,
+            errorReason: `Subscription ACK channel mismatch: expected "${this.activeChannelId}", got "${channelInFrame}"`,
+          };
+        }
+      }
+      return {
+        isControl: true,
+        isError: false,
+        isPositiveAck: true,
+        isSocketConnectedOnly: false,
+      };
     }
 
-    if (
-      typeof parsed.status === 'string' &&
-      ['subscribed', 'connected', 'ok', 'success'].includes(parsed.status.toLowerCase())
-    ) {
-      return true;
+    // C. Check for generic connected frames (transport level only)
+    const isGenericConnected =
+      parsed.type === 'connected' ||
+      parsed.event === 'connected' ||
+      (parsed.status === 'connected' && parsed.action !== 'ack');
+
+    if (isGenericConnected) {
+      return {
+        isControl: true,
+        isError: false,
+        isPositiveAck: false,
+        isSocketConnectedOnly: true,
+      };
     }
 
-    return false;
-  }
-
-  private isErrorControlFrame(parsed: any): boolean {
-    if (!parsed || typeof parsed !== 'object') return false;
-
-    if (parsed.status === 'error' || parsed.event === 'error' || parsed.type === 'error') {
-      return true;
-    }
-
-    if (parsed.error && typeof parsed.error === 'string') {
-      return true;
-    }
-
-    return false;
+    return {
+      isControl: false,
+      isError: false,
+      isPositiveAck: false,
+      isSocketConnectedOnly: false,
+    };
   }
 
   /**

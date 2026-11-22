@@ -33,6 +33,8 @@ export interface BridgeTransportConnectOptions {
   requireAck?: boolean;
   ackTimeoutMs?: number;
   connectTimeoutMs?: number;
+  allowLoopback?: boolean;
+  allowedHosts?: string[];
 }
 
 export interface ILiveBridgeTransport {

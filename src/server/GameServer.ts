@@ -23,6 +23,9 @@ export interface GameServerOptions {
   persistence?: IPersistenceAdapter;
   operatorToken?: string;
   tiktokTransport?: ILiveBridgeTransport;
+  allowedOrigins?: string[];
+  allowedBridgeHosts?: string[];
+  requireAck?: boolean;
 }
 
 export class GameServer {
@@ -39,6 +42,8 @@ export class GameServer {
   private unsubscribeState: (() => void) | null = null;
   private pendingBroadcast = false;
   private lastBroadcastTime = 0;
+  private customAllowedOrigins?: string[];
+  public requireAck: boolean;
 
   private activePlatform: 'mock' | 'tiktok_experimental' = 'mock';
 
@@ -49,6 +54,10 @@ export class GameServer {
       options.operatorToken ||
       process.env.LIVE_CITY_OPERATOR_TOKEN ||
       crypto.randomBytes(24).toString('hex');
+    this.customAllowedOrigins = options.allowedOrigins;
+    this.requireAck =
+      options.requireAck ??
+      (process.env.TIKTOK_REQUIRE_ACK === 'true' || process.env.TIKTOK_REQUIRE_ACK === '1');
 
     const bridgeUrl = process.env.TIKTOK_BRIDGE_URL || '';
     this.activePlatform = bridgeUrl ? 'tiktok_experimental' : 'mock';
@@ -62,6 +71,7 @@ export class GameServer {
     this.tiktokAdapter = new TikTokLiveAdapter({
       transport,
       bridgeUrl,
+      requireAck: this.requireAck,
     });
 
     const persistence = options.persistence || new FilePersistenceAdapter();
@@ -204,12 +214,62 @@ export class GameServer {
     });
   }
 
-  private isAllowedOrigin(origin?: string): boolean {
-    if (!origin) return true; // Local same-origin or Node client without Origin header
+  public getAllowedOrigins(): Set<string> {
+    const origins = new Set<string>();
+
+    // Standard Vite Dev & Preview ports
+    origins.add('http://localhost:3000');
+    origins.add('http://127.0.0.1:3000');
+    origins.add('http://[::1]:3000');
+    origins.add('http://localhost:5173');
+    origins.add('http://127.0.0.1:5173');
+    origins.add('http://[::1]:5173');
+    origins.add('http://localhost:4173');
+    origins.add('http://127.0.0.1:4173');
+    origins.add('http://[::1]:4173');
+
+    // Standalone server port
+    if (this.port) {
+      origins.add(`http://localhost:${this.port}`);
+      origins.add(`http://127.0.0.1:${this.port}`);
+      origins.add(`http://[::1]:${this.port}`);
+    }
+
+    // Configured allowed origins from constructor options
+    if (this.customAllowedOrigins) {
+      for (const o of this.customAllowedOrigins) {
+        try {
+          origins.add(new URL(o).origin.toLowerCase());
+        } catch {
+          // ignore invalid custom origin string
+        }
+      }
+    }
+
+    // Configured allowed origins from environment variable
+    if (process.env.LIVE_CITY_ALLOWED_ORIGINS) {
+      const envList = process.env.LIVE_CITY_ALLOWED_ORIGINS.split(',').map((s) => s.trim());
+      for (const o of envList) {
+        try {
+          origins.add(new URL(o).origin.toLowerCase());
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return origins;
+  }
+
+  public isAllowedOrigin(origin?: string): boolean {
+    if (!origin) return true; // Direct same-origin or server-to-server request
+    if (origin === 'null' || origin === 'NULL') {
+      return false; // Reject sandboxed iframe / null origin attacks
+    }
     try {
       const parsed = new URL(origin);
-      const h = parsed.hostname.toLowerCase();
-      return h === '127.0.0.1' || h === 'localhost' || h === '[::1]';
+      const normalizedOrigin = parsed.origin.toLowerCase();
+      return this.getAllowedOrigins().has(normalizedOrigin);
     } catch {
       return false;
     }
@@ -306,7 +366,13 @@ export class GameServer {
     res: http.ServerResponse
   ): Promise<void> {
     const origin = req.headers.origin;
-    if (!this.isAllowedOrigin(origin) || !this.isLoopbackAddress(req.socket?.remoteAddress)) {
+    if (origin && !this.isAllowedOrigin(origin)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Forbidden: Origin not in allowlist' }));
+      return;
+    }
+
+    if (!this.isLoopbackAddress(req.socket?.remoteAddress)) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Forbidden: Local loopback access only' }));
       return;
@@ -316,7 +382,7 @@ export class GameServer {
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
     };
-    if (origin) {
+    if (origin && this.isAllowedOrigin(origin)) {
       corsHeaders['Access-Control-Allow-Origin'] = origin;
       corsHeaders['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
       corsHeaders['Access-Control-Allow-Headers'] = 'Content-Type, x-operator-token';
@@ -368,8 +434,28 @@ export class GameServer {
       return;
     }
 
-    // Local session bootstrap for Operator Dashboard (strictly loopback-verified)
+    // Local session bootstrap for Operator Dashboard (strictly allowlist & loopback-verified)
     if (req.method === 'GET' && pathname === '/api/auth/session') {
+      if (origin && !this.isAllowedOrigin(origin)) {
+        res.writeHead(403, corsHeaders);
+        res.end(JSON.stringify({ error: 'Forbidden: Origin unauthorized for session bootstrap' }));
+        return;
+      }
+      if (!origin) {
+        const hostHeader = (req.headers.host || '').toLowerCase();
+        const isLocalHost =
+          hostHeader.startsWith('localhost:') ||
+          hostHeader.startsWith('127.0.0.1:') ||
+          hostHeader.startsWith('[::1]:') ||
+          hostHeader === 'localhost' ||
+          hostHeader === '127.0.0.1' ||
+          hostHeader === '[::1]';
+        if (!isLocalHost) {
+          res.writeHead(403, corsHeaders);
+          res.end(JSON.stringify({ error: 'Forbidden: Host header unauthorized' }));
+          return;
+        }
+      }
       res.writeHead(200, corsHeaders);
       res.end(JSON.stringify({ operatorToken: this.operatorToken }));
       return;
@@ -564,7 +650,9 @@ export class GameServer {
         if (platform === 'tiktok_experimental') {
           this.activePlatform = 'tiktok_experimental';
           try {
-            await this.tiktokAdapter.connect({ channelId, bridgeUrl });
+            const reqAck =
+              typeof body.requireAck === 'boolean' ? body.requireAck : this.requireAck;
+            await this.tiktokAdapter.connect({ channelId, bridgeUrl, requireAck: reqAck });
             this.broadcastState();
             res.writeHead(200, corsHeaders);
             res.end(JSON.stringify({ ok: true, liveConnection: this.getActiveLiveState() }));

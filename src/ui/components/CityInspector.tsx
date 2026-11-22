@@ -20,6 +20,9 @@ import {
   ExternalLink,
   AlertTriangle,
   CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  PowerOff,
 } from 'lucide-react';
 
 interface CityInspectorProps {
@@ -51,6 +54,7 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
   const [selectedCitizenId, setSelectedCitizenId] = useState<string | null>(null);
   const [tiktokChannel, setTiktokChannel] = useState('');
   const [tiktokBridgeUrl, setTiktokBridgeUrl] = useState('');
+  const [requireAck, setRequireAck] = useState(true);
 
   const selectedCitizen = citizens.find((c) => c.id === selectedCitizenId);
   const hasActiveConstruction = buildings.some((b) => b.status === 'constructing');
@@ -389,22 +393,32 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
             <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-slate-200">Nguồn sự kiện Livestream:</span>
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
-                    liveConnection.status === 'connected'
-                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
-                      : liveConnection.status === 'error'
-                      ? 'bg-rose-950 text-rose-300 border border-rose-500/40'
-                      : 'bg-amber-950 text-amber-300 border border-amber-500/40'
-                  }`}
-                >
-                  {liveConnection.status === 'connected' ? (
+                {liveConnection.status === 'connected' && liveConnection.subscriptionVerified ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 bg-emerald-950 text-emerald-300 border border-emerald-500/40">
                     <CheckCircle2 className="w-3 h-3" />
-                  ) : (
+                    {liveConnection.platform.toUpperCase()} • ĐÃ XÁC MINH
+                  </span>
+                ) : liveConnection.status === 'connected' && !liveConnection.subscriptionVerified ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 bg-yellow-950 text-yellow-300 border border-yellow-500/40">
+                    <AlertCircle className="w-3 h-3" />
+                    {liveConnection.platform.toUpperCase()} • CHỜ XÁC MINH
+                  </span>
+                ) : liveConnection.status === 'reconnecting' ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 bg-amber-950 text-amber-300 border border-amber-500/40 animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    {liveConnection.platform.toUpperCase()} • ĐANG RECONNECT
+                  </span>
+                ) : liveConnection.status === 'error' ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 bg-rose-950 text-rose-300 border border-rose-500/40">
                     <AlertTriangle className="w-3 h-3" />
-                  )}
-                  {liveConnection.platform.toUpperCase()} • {liveConnection.status.toUpperCase()}
-                </span>
+                    {liveConnection.platform.toUpperCase()} • LỖI
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 bg-slate-800 text-slate-400 border border-slate-700">
+                    <PowerOff className="w-3 h-3" />
+                    {liveConnection.platform.toUpperCase()} • CHƯA KẾT NỐI
+                  </span>
+                )}
               </div>
 
               <div className="text-[11px] text-slate-400">
@@ -434,13 +448,23 @@ export const CityInspector: React.FC<CityInspectorProps> = ({
                   placeholder="Local Bridge URL (tùy chọn, vd: ws://127.0.0.1:21213)"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-[11px] text-slate-200"
                 />
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer select-none pt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={requireAck}
+                    onChange={(e) => setRequireAck(e.target.checked)}
+                    className="rounded border-slate-700 text-cyan-500 focus:ring-0 bg-slate-900"
+                  />
+                  <span>Bắt buộc xác thực handshake (Strict ACK)</span>
+                </label>
                 <div className="flex gap-1.5">
                   <button
                     onClick={() =>
                       client.connectLiveAdapter(
                         'tiktok_experimental',
                         tiktokChannel,
-                        tiktokBridgeUrl
+                        tiktokBridgeUrl,
+                        requireAck
                       )
                     }
                     className="flex-1 py-1.5 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white font-bold text-[11px]"
