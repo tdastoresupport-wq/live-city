@@ -1,85 +1,22 @@
-# LIVE CITY — SƠ ĐỒ LUỒNG DỮ LIỆU (DATA FLOW SPECIFICATION)
-
-Tài liệu này mô tả luồng dữ liệu thời gian thực giữa Khán giả Livestream, Local Game Server, Operator Dashboard (`/`) và OBS Stage (`/stage`).
+# LIVE CITY — Data & Command Flow
 
 ---
 
-## 1. LUỒNG ĐỒNG BỘ REALTIME GIỮA SERVER, DASHBOARD VÀ OBS STAGE
+## 1. End-to-End Viewer Action Pipeline
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Viewer as Khán giả / Simulator
-    participant Adapter as LiveAdapter (Mock / TikTok Bridge)
-    participant Server as Local Game Server (127.0.0.1)
-    participant Engine as Headless GameEngine
-    participant Disk as FilePersistence (.data/)
-    participant Dashboard as Operator Dashboard (/)
-    participant OBS as OBS Stage (/stage)
-
-    OBS->>Server: Kết nối WebSocket (ws://127.0.0.1/ws)
-    Server-->>OBS: Gửi Initial Snapshot v2 + LiveConnectionState
-    Dashboard->>Server: Kết nối WebSocket + Lấy Session Token (/api/auth/session)
-    Server-->>Dashboard: Gửi Initial Snapshot v2 + Operator Token
-
-    Viewer->>Adapter: Bình luận ("GỖ", "XÂY", "VOTE 1", "KHÁM PHÁ")
-    Adapter->>Engine: Chuẩn hóa RawLiveComment (Chống Replay & Duplicate)
-    Engine->>Engine: CommandParser ➔ RateLimiter (User + Global) ➔ Domain System
-    Engine->>Server: WorldState.batch() hoàn tất ➔ Kích hoạt State Listener
-    Server-->>OBS: Broadcast state_sync qua WebSocket
-    Server-->>Dashboard: Broadcast state_sync qua WebSocket
-    Engine->>Disk: Auto-save Snapshot v2 (kèm bản sao lưu .backup.json)
-```
-
----
-
-## 2. LUỒNG BẢO TOÀN CARGO VÀ HÀNG ĐỢI NHIỆM VỤ CƯ DÂN
-
-```mermaid
-stateDiagram-v2
-    [*] --> idle: Gia nhập (VÀO)
-    idle --> moving_to_harvest: Lệnh GỖ / ĐÁ / LƯƠNG THỰC
-    moving_to_harvest --> harvesting: Tới mỏ tài nguyên
-    harvesting --> carrying_resource: Thu hoạch xong (Có carriedResource)
-    
-    carrying_resource --> carrying_resource: Nhận lệnh mới (XÂY / KHÁM PHÁ) ➔ Lưu vào queuedTask (KHÔNG HỦY CARGO)
-    carrying_resource --> idle: Tới kho ➔ Nộp tài nguyên vào WorldState
-    
-    idle --> moving_to_build: Tự động lấy queuedTask = build (hoặc lệnh XÂY)
-    moving_to_build --> building: Tới công trường
-    building --> idle: Công trình hoàn thành (100%)
-    
-    idle --> exploring: Tự động lấy queuedTask = explore (hoặc lệnh KHÁM PHÁ)
-    exploring --> idle: Mở vùng Fog of War & phát hiện mỏ mới
-```
-
----
-
-## 3. LUỒNG BIỂU QUYẾT DỰ ÁN CỘNG ĐỒNG (COMMUNITY VOTING FLOW)
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Operator as Người vận hành (Dashboard)
-    actor Viewers as Khán giả Livestream
-    participant Server as GameServer / BuildingSystem
-    participant State as WorldState
-    participant Stage as OBS Stage (/stage)
-
-    Operator->>Server: POST /api/control/vote { action: "open", durationSeconds: 90 }
-    Server->>State: Khởi tạo VotingSession với 3 công trình đã mở khóa
-    State-->>Stage: Hiển thị bảng bình chọn (VOTE 1, VOTE 2, VOTE 3) trên HUD
-
-    loop Trong thời gian mở bình chọn
-        Viewers->>Server: Bình luận "VOTE 1", "BÌNH CHỌN 2"
-        Server->>Server: Kiểm tra mỗi userId chỉ có 1 phiếu duy nhất
-        Server->>State: Cộng phiếu & cập nhật tỷ lệ bình chọn trực tiếp
-        State-->>Stage: Cập nhật số phiếu thời gian thực
-    end
-
-    alt Hết thời gian hoặc Operator bấm Chốt Phiếu
-        Server->>State: Đóng phiên vote, lưu vào voteHistory, chọn công trình nhiều phiếu nhất
-        Server->>State: Kiểm tra tài nguyên & vị trí ➔ Khởi công dự án thắng cuộc
-        State-->>Stage: Hiển thị giàn giáo công trình mới để cư dân gõ XÂY
-    end
-```
+1. **Ingress (`MockLiveAdapter`, `/api/command`, or `TikTokLiveAdapter`):**
+   - Viewer comment/gift/like arrives as JSON (local simulator, HTTP webhook `/api/live/webhook`, or external WebSocket bridge frame).
+   - `WebSocketBridgeTransport.normalizePayload` normalizes Convention A (`type`) and Convention B (`event + data`) wire formats.
+   - `TikTokLiveAdapter.handleIncomingPayload` validates `maxReplayAgeMs` (`120_000` ms default), deduplicates via `Deduplicator`, and emits normalized events stamped with authoritative receive clock (`timestamp: now`).
+2. **Command Validation & Throttling (`CommandDispatcher`):**
+   - `CommandParser` normalizes bilingual Vietnamese/English aliases and caps comments/nicknames.
+   - `RateLimiter` applies monotonic per-user cooldowns and global flood protection.
+3. **Simulation Mutation (`WorldState` & Systems):**
+   - Mutations run inside `WorldState.batch(...)` which increments monotonic `stateVersion`, invalidates cached `discoveredTiles`, evaluates `checkAndUnlockMilestones()`, and notifies subscribers cleanly.
+   - `CitizenSystem` moves citizens via Octile A* (`findPath`), preserves `carriedResource` across reassignments and `cancelTask()`, recovers mid-action when nodes deplete or buildings finish, and grants progression XP (`xp`/`level`/`title`).
+4. **Broadcast & Render (`GameServer` -> `PixiWorldRenderer`):**
+   - `GameServer` broadcasts compact JSON snapshots over `/ws`.
+   - `StreamStage` drives `PixiWorldRenderer.syncIfNeeded(worldState)`, updating Pixi containers only when `worldState.getStateVersion()` advances.
+5. **Disk Persistence (`FilePersistenceAdapter`):**
+   - `GameEngine` auto-saves every 30s (`world_save`) and on clean shutdown.
+   - Saves serialize per key via `saveQueues`, validate current `.json` before rotating `.backup.json`, write to PID/counter unique `.tmp.json`, and atomically rename with Windows retry handling.

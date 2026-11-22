@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  verify:
-    name: Typecheck, Test & Build (Node 22.x)
+  build-and-verify:
+    name: Typecheck, Lint, Test, Build, Smoke & Load (${{ matrix.node-version }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -16,26 +16,32 @@ jobs:
         node-version: [22.x]
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Clean Dependency Install
         run: npm ci
 
-      - name: Run TypeScript typecheck
+      - name: TypeScript Typecheck
         run: npm run typecheck
 
-      - name: Run linter check
+      - name: ESLint Verification
         run: npm run lint
 
-      - name: Run unit & integration tests
+      - name: Automated Vitest Suite
         run: npm test
 
-      - name: Build production bundle
+      - name: Production Vite Build
         run: npm run build
+
+      - name: Authoritative Server Smoke Test
+        run: npm run test:smoke
+
+      - name: Engine 60-Citizen Load Benchmark
+        run: npm run test:load

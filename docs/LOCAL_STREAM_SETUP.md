@@ -1,79 +1,59 @@
-# LIVE CITY — HƯỚNG DẪN THIẾT LẬP LIVESTREAM & OBS (`LOCAL_STREAM_SETUP.md`)
-
-Tài liệu này hướng dẫn chi tiết cách vận hành **LIVE CITY** trên máy tính của Streamer cùng phần mềm **OBS Studio** hoặc **TikTok LIVE Studio**.
+# LIVE CITY — Local Streaming & OBS Setup Guide
 
 ---
 
-## 1. KHỞI CHẠY LOCAL GAME SERVER & FRONTEND
+## 1. Environment Configuration
 
-Tại thư mục gốc của dự án, mở terminal và chạy:
+Copy `.env.example` to `.env` before customizing runtime values (never commit `.env`):
 
-```bash
-npm install
-npm run dev
+```env
+LIVE_CITY_HOST=127.0.0.1
+LIVE_CITY_PORT=4000
+LIVE_CITY_OPERATOR_TOKEN=
+LIVE_CITY_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://127.0.0.1:4173,http://127.0.0.1:5173
+TIKTOK_BRIDGE_URL=
+TIKTOK_REQUIRE_ACK=true
+LIVE_CITY_ALLOW_LOOPBACK_BRIDGE=true
+LIVE_CITY_ALLOWED_BRIDGE_HOSTS=
 ```
 
-*(Hoặc chạy bản Production đã tối ưu hóa)*:
-
-```bash
-npm run build
-npm run preview
-```
-
-Khi máy chủ khởi chạy, toàn bộ dịch vụ chỉ lắng nghe an toàn trên địa chỉ cục bộ `127.0.0.1`:
-- **Operator Dashboard (Màn hình điều khiển của Streamer):**
-  - Dev mode: `http://127.0.0.1:3000/`
-  - Preview mode: `http://127.0.0.1:4173/`
-- **OBS Stage (Màn hình sân khấu độc lập cho khán giả):**
-  - Dev mode: `http://127.0.0.1:3000/stage`
-  - Preview mode: `http://127.0.0.1:4173/stage`
-  - Chế độ nền trong suốt (Transparent Overlay): `http://127.0.0.1:3000/stage?bg=transparent`
+When `LIVE_CITY_OPERATOR_TOKEN` is left empty, `GameServer` generates a fresh ephemeral CSPRNG hex token on each startup and delivers it strictly to verified loopback/origin local dashboard sessions via `GET /api/auth/session`.
 
 ---
 
-## 2. CẤU HÌNH OBS BROWSER SOURCE CHUẨN 9:16 (1080 × 1920)
+## 2. Running Locally for Broadcast
 
-1. Mở **OBS Studio** (hoặc TikTok LIVE Studio).
-2. Trong mục **Settings > Video**, đặt kích thước khung hình dọc livestream:
-   - **Base (Canvas) Resolution:** `1080x1920`
-   - **Output (Scaled) Resolution:** `1080x1920`
-   - **FPS:** `60` (hoặc `30`)
-3. Trong mục **Sources**, nhấn dấu **`+`** ➔ Chọn **Browser** (Nguồn trình duyệt) ➔ Đặt tên là `LIVE CITY STAGE`.
-4. Nhập các thông số sau:
-   - **URL:** `http://127.0.0.1:3000/stage` *(hoặc `http://127.0.0.1:4173/stage` nếu chạy preview)*
-   - **Width:** `1080`
-   - **Height:** `1920`
-   - **Use custom frame rate:** Bật và đặt `60` FPS.
-   - **Shutdown source when not visible:** Tắt (Không tích) để giữ kết nối WebSocket liên tục khi chuyển cảnh.
-5. Nhấn **OK**.
+1. **Start Authoritative Game Server:**
+   ```bash
+   npm run server
+   ```
+   Persists saves safely in `.data/world_save.json` (plus `.backup.json`).
 
----
+2. **Start UI / OBS Stage Server (Dev or Production Preview):**
+   ```bash
+   npm run dev
+   # or production preview after npm run build:
+   npm run preview -- --host 127.0.0.1 --port 4173
+   ```
 
-## 3. KIỂM TRA ĐỒNG BỘ GIỮA DASHBOARD VÀ OBS STAGE
-
-1. Mở trình duyệt thông thường truy cập **Operator Dashboard**: `http://127.0.0.1:3000/`.
-2. Kiểm tra nhãn trạng thái trên thanh Header hiển thị: **`Local Server Synced (127.0.0.1)`** màu xanh lá.
-3. Trong bảng **Mô phỏng tương tác livestream**, nhấn nút **`VÀO`** hoặc **`GỖ`** (hoặc bật **`Chạy Bot Khán Giả`**).
-4. Quan sát trên cửa sổ **OBS Studio (`/stage`)**: Cư dân sẽ xuất hiện và di chuyển ngay lập tức trên cả 2 màn hình mà không có độ trễ hay sai lệch trạng thái.
+3. **Open Operator Dashboard:**  
+   Navigate to `http://127.0.0.1:5173/` (or `:4173/`). Use the **Mô phỏng tương tác livestream** panel to test commands offline, manage builds/votes in **Dự án**, inspect viewer stats in **Cư dân**, or connect your local WebSocket bridge in **Live & OBS**.
 
 ---
 
-## 4. KẾT NỐI NGUỒN SỰ KIỆN LIVESTREAM (LIVE ADAPTER)
+## 3. OBS Studio Browser Source Setup
 
-Trong Operator Dashboard ➔ Tab **`Live & OBS`**:
-- **Chế độ Mock Simulator (Mặc định):** Dùng để kiểm thử gameplay, chạy bot tự động hoặc điều khiển trực tiếp trong các buổi thử nghiệm.
-- **Chế độ TikTok LIVE Bridge / Webhook:**
-  - Kiến trúc của LIVE CITY tách biệt hoàn toàn `TikTokLiveAdapter` khỏi `GameEngine`.
-  - Vì TikTok không cung cấp API WebSocket mở trực tiếp cho trình duyệt không xác thực, bạn có thể chạy một dịch vụ Local Webcast Bridge trên máy và đẩy sự kiện vào endpoint `POST http://127.0.0.1:3000/api/live/webhook` (kèm header `x-operator-token`) hoặc kết nối qua `TIKTOK_BRIDGE_URL`.
-  - Nếu chưa khởi chạy Bridge bên ngoài, giao diện sẽ hiển thị trung thực trạng thái **`ERROR / CHờ TÍCH HỢP BRIDGE`**, tuyệt đối không bao giờ giả lập trạng thái đã kết nối.
+- Add a **Browser Source** in OBS Studio:
+  - **URL:** `http://127.0.0.1:4173/stage` (or `http://127.0.0.1:4173/stage?bg=transparent` for overlay compositing)
+  - **Width:** `1080`
+  - **Height:** `1920`
+  - Enable **Shutdown source when not visible** = unchecked (keeps live sync active).
+- `/stage` connects read-only to `ws://127.0.0.1:4000/ws`, renders PixiJS canvas + HUD overlays + Leaderboard + Live Ticker, and strips all operator control buttons.
 
 ---
 
-## 5. XỬ LÝ SỰ CỐ THƯỜNG GẶP (TROUBLESHOOTING)
+## 4. Connecting an External Local TikTok Bridge
 
-- **OBS Browser Source hiển thị màn hình trắng hoặc không tải được:**
-  - Đảm bảo lệnh `npm run dev` hoặc `npm run preview` đang chạy trong terminal.
-  - Kiểm tra đúng địa chỉ `http://127.0.0.1:3000/stage` (dùng `127.0.0.1` thay vì IP mạng LAN vì server chỉ bind loopback để bảo mật).
-  - Trong OBS, nhấp chuột phải vào nguồn `LIVE CITY STAGE` ➔ Chọn **Interact** hoặc mở Properties và nhấn **Refresh cache of current page**.
-- **OBS bị giật hình (Stutter):**
-  - Bật **Hardware Acceleration** cho Browser Source trong phần **Settings > Advanced > Sources > Enable Browser Source Hardware Acceleration** của OBS Studio.
+1. Start your local WebSocket relay/bridge on loopback (e.g. `ws://127.0.0.1:21213`) conforming to [BRIDGE_PROTOCOL.md](file:///c:/Users/Zev/Desktop/live-city/docs/BRIDGE_PROTOCOL.md).
+2. In Dashboard -> **Live & OBS**, enter the TikTok `@channel`, optional bridge URL (`ws://127.0.0.1:21213`), keep **Bắt buộc xác thực handshake (Strict ACK)** checked, and click **Kết nối TikTok Bridge**.
+3. Wait until badge shows **`ĐÃ XÁC MINH`**. Note: Live external TikTok webcast connectivity cannot run in CI and requires live broadcaster verification before going live.
