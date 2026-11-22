@@ -4,14 +4,12 @@ export class AudioSystem implements IAudioSystem {
   private ctx: AudioContext | null = null;
   private muted = false;
 
-  constructor() {
-    // AudioContext will be initialized on first user interaction to comply with browser autoplay policy
-  }
-
   private initContext(): AudioContext | null {
-    if (this.muted) return null;
+    if (this.muted || typeof window === 'undefined') return null;
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (AudioCtx) {
         this.ctx = new AudioCtx();
       }
@@ -34,7 +32,6 @@ export class AudioSystem implements IAudioSystem {
     const ctx = this.initContext();
     if (!ctx) return;
 
-    // Uplifting pleasant chime (C5 - E5 - G5)
     const notes = [523.25, 659.25, 783.99];
     notes.forEach((freq, idx) => {
       const osc = ctx.createOscillator();
@@ -65,7 +62,6 @@ export class AudioSystem implements IAudioSystem {
     const now = ctx.currentTime;
 
     if (type === 'wood') {
-      // Warm wooden knock
       osc.type = 'sine';
       osc.frequency.setValueAtTime(260, now);
       osc.frequency.exponentialRampToValueAtTime(110, now + 0.08);
@@ -73,7 +69,6 @@ export class AudioSystem implements IAudioSystem {
       gain.gain.setValueAtTime(0.2, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
     } else {
-      // Crisp metallic stone clink
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(1200, now);
       osc.frequency.exponentialRampToValueAtTime(700, now + 0.06);
@@ -93,7 +88,6 @@ export class AudioSystem implements IAudioSystem {
     const ctx = this.initContext();
     if (!ctx) return;
 
-    // Dual hammer tap
     [0, 0.1].forEach((delay) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -118,7 +112,6 @@ export class AudioSystem implements IAudioSystem {
     const ctx = this.initContext();
     if (!ctx) return;
 
-    // Victory fanfare arpeggio (C5 - G5 - C6)
     const notes = [523.25, 783.99, 1046.5];
     notes.forEach((freq, idx) => {
       const osc = ctx.createOscillator();
@@ -144,7 +137,6 @@ export class AudioSystem implements IAudioSystem {
     const ctx = this.initContext();
     if (!ctx) return;
 
-    // High shimmer
     [659.25, 830.61, 987.77, 1318.51].forEach((freq, idx) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();

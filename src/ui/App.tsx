@@ -124,7 +124,7 @@ export const App: React.FC = () => {
         {/* Right Sidebar: Comment Simulator & City Inspector */}
         <aside className="w-80 md:w-96 flex flex-col gap-3 shrink-0 overflow-y-auto pr-1">
           {/* Comment Simulator */}
-          <CommentSimulator liveAdapter={engine.liveAdapter} />
+          <CommentSimulator liveAdapter={engine.mockAdapter} />
 
           {/* City Inspector */}
           <CityInspector

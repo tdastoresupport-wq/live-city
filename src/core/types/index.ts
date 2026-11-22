@@ -9,13 +9,14 @@ export interface WorldTile {
   elevation: number;
   walkable: boolean;
   variation: number; // for decorative tile variations
+  discovered?: boolean; // Fog of war state
 }
 
 export type ResourceType = 'wood' | 'stone' | 'food' | 'gold';
 
 export interface ResourceNode {
   id: string;
-  type: 'tree' | 'rock' | 'water_spring';
+  type: 'tree' | 'rock' | 'water_spring' | 'berry_bush' | 'gold_vein';
   resourceType: ResourceType;
   x: number;
   y: number;
@@ -26,6 +27,7 @@ export interface ResourceNode {
   depleted: boolean;
   depletedTimer: number; // countdown until regeneration
   name: string;
+  discovered?: boolean;
 }
 
 export type BuildingType =
@@ -34,7 +36,9 @@ export type BuildingType =
   | 'lumber_mill'
   | 'quarry_mason'
   | 'cozy_house'
-  | 'watchtower';
+  | 'watchtower'
+  | 'bakery_farm'
+  | 'market_hall';
 
 export interface BuildingBlueprint {
   type: BuildingType;
@@ -45,7 +49,13 @@ export interface BuildingBlueprint {
   requiredProgress: number;
   cost: Partial<Record<ResourceType, number>>;
   storageBonus?: Partial<Record<ResourceType, number>>;
+  gatherBonus?: Partial<Record<ResourceType, number>>;
+  citizenCapBonus?: number;
+  passiveFoodPerMin?: number;
+  passiveGoldPerMin?: number;
   unlockedAtLevel: number;
+  defaultX?: number;
+  defaultY?: number;
 }
 
 export interface Building {
@@ -76,9 +86,17 @@ export type CitizenState =
 export interface CitizenStats {
   woodHarvested: number;
   stoneHarvested: number;
+  foodHarvested?: number;
+  goldEarned?: number;
   buildingsContributed: number;
   explorationPoints: number;
   totalCommands: number;
+}
+
+export interface CitizenQueuedTask {
+  type: 'harvest' | 'build' | 'explore';
+  resourceType?: ResourceType;
+  targetBuildingId?: string;
 }
 
 export interface Citizen {
@@ -98,11 +116,14 @@ export interface Citizen {
     type: ResourceType;
     amount: number;
   };
+  queuedTask?: CitizenQueuedTask;
   carryCapacity: number;
   speed: number; // tiles per second
   actionTimer: number; // timer in seconds
   stats: CitizenStats;
+  joinedAt?: number;
   lastActiveTime: number;
+  isResting?: boolean;
   floatingText?: {
     text: string;
     color: string;
@@ -123,8 +144,49 @@ export interface CityStats {
   exp: number;
   expToNextLevel: number;
   citizensCount: number;
+  activeCitizensCap?: number;
   dayTime: number; // 0.0 - 1.0 (sun cycle)
   exploredPercentage: number;
+}
+
+export interface VotingOption {
+  index: number;
+  type: BuildingType;
+  name: string;
+  description: string;
+  cost: Partial<Record<ResourceType, number>>;
+  votes: number;
+}
+
+export interface VotingSession {
+  id: string;
+  status: 'open' | 'closed';
+  startedAt: number;
+  endsAt: number;
+  options: VotingOption[];
+  voterChoices: Record<string, number>; // userId -> option index (1-based)
+  winnerType?: BuildingType;
+}
+
+export type CityEventType =
+  | 'harvest_festival'
+  | 'rain_storm'
+  | 'builders_day'
+  | 'treasure_hunt'
+  | 'resource_boom';
+
+export interface CityActiveEvent {
+  id: string;
+  type: CityEventType;
+  name: string;
+  description: string;
+  startedAt: number;
+  endsAt: number;
+  modifiers: {
+    speedMultiplier: number;
+    harvestMultiplier: number;
+    buildMultiplier: number;
+  };
 }
 
 export type GameEventType =
@@ -138,6 +200,8 @@ export type GameEventType =
   | 'city_leveled_up'
   | 'exploration_reward'
   | 'command_rejected'
+  | 'voting_update'
+  | 'city_event'
   | 'system_info';
 
 export interface GameEvent {
@@ -153,8 +217,11 @@ export type CommandAction =
   | 'JOIN'
   | 'WOOD'
   | 'STONE'
+  | 'FOOD'
   | 'BUILD'
   | 'EXPLORE'
+  | 'VOTE'
+  | 'TRADE'
   | 'HELP'
   | 'STATUS';
 

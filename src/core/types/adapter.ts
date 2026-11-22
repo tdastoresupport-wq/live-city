@@ -1,5 +1,26 @@
 import { GameEvent, ParsedCommand } from './index';
 
+export type LiveConnectionStatus =
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'error';
+
+export type LivePlatformType = 'mock' | 'tiktok_experimental' | 'webhook';
+
+export interface LiveConnectionState {
+  status: LiveConnectionStatus;
+  platform: LivePlatformType;
+  channelId?: string;
+  connectedAt?: number;
+  lastEventAt?: number;
+  errorMessage?: string;
+  isExperimental?: boolean;
+  eventsReceived: number;
+  reconnectAttempts: number;
+}
+
 export interface RawLiveComment {
   id: string;
   userId: string;
@@ -30,9 +51,11 @@ export interface RawLiveLike {
 }
 
 export interface ILiveEventAdapter {
-  connect(): Promise<void>;
+  connect(options?: { channelId?: string }): Promise<void>;
   disconnect(): Promise<void>;
   isConnected(): boolean;
+  getConnectionState?(): LiveConnectionState;
+  onStateChange?(callback: (state: LiveConnectionState) => void): () => void;
   onComment(callback: (comment: RawLiveComment) => void): () => void;
   onGift?(callback: (gift: RawLiveGift) => void): () => void;
   onLike?(callback: (like: RawLiveLike) => void): () => void;
