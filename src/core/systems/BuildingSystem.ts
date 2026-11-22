@@ -146,14 +146,13 @@ export class BuildingSystem {
     );
     const unlocked = this.getUnlockedBlueprints();
 
-    let candidates: BuildingBlueprint[] = [];
-    if (customTypes && customTypes.length > 0) {
-      candidates = unlocked.filter((b) => customTypes.includes(b.type));
-    } else {
-      // Prioritize unlocked buildings not yet built, then allow additional houses/barns
-      const unbuiltUnlocked = unlocked.filter((b) => !builtTypes.has(b.type));
-      candidates = unbuiltUnlocked.length >= 2 ? unbuiltUnlocked.slice(0, 3) : unlocked.slice(0, 3);
-    }
+    const candidates =
+      customTypes && customTypes.length > 0
+        ? unlocked.filter((b) => customTypes.includes(b.type))
+        : (() => {
+            const unbuiltUnlocked = unlocked.filter((b) => !builtTypes.has(b.type));
+            return unbuiltUnlocked.length >= 2 ? unbuiltUnlocked.slice(0, 3) : unlocked.slice(0, 3);
+          })();
 
     if (candidates.length === 0) {
       return null;

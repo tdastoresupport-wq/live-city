@@ -1,27 +1,45 @@
+process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING = 'true';
 import { defineConfig, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import type * as http from 'node:http';
-
 function liveCityGameServerPlugin(): Plugin {
-  let shutdownFn: (() => Promise<void>) | null = null;
+  let activeInstance: any = null;
+
+  async function attachServer(
+    httpServer: http.Server,
+    middlewares: {
+      use: (fn: (req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => void) => void;
+    }
+  ) {
+    if (activeInstance) {
+      await activeInstance.shutdown().catch(() => {});
+      activeInstance = null;
+    }
+
+    const { GameServer } = await import('./src/server/GameServer.ts');
+    const serverInstance = new GameServer();
+    await serverInstance.initAndStartEngine();
+    serverInstance.attachToHttpServer(httpServer, middlewares);
+    activeInstance = serverInstance;
+
+    httpServer.on('close', () => {
+      if (activeInstance === serverInstance) {
+        serverInstance.shutdown().catch(() => {});
+        activeInstance = null;
+      }
+    });
+  }
 
   return {
     name: 'live-city-game-server',
     async configureServer(server) {
       if (!server.httpServer) return;
-      const mod = await server.ssrLoadModule('/src/server/GameServer.ts');
-      const GameServerClass = mod.GameServer;
-      const instance = new GameServerClass();
-      await instance.initAndStartEngine();
-      instance.attachToHttpServer(server.httpServer as http.Server, server.middlewares);
-      shutdownFn = () => instance.shutdown();
+      await attachServer(server.httpServer as http.Server, server.middlewares);
     },
-    async closeBundle() {
-      if (shutdownFn) {
-        await shutdownFn();
-        shutdownFn = null;
-      }
+    async configurePreviewServer(server) {
+      if (!server.httpServer) return;
+      await attachServer(server.httpServer as http.Server, server.middlewares);
     },
   };
 }

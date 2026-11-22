@@ -14,6 +14,8 @@ import {
   VotingSession,
   CityActiveEvent,
 } from '../../core/types';
+import { ServerSyncStatus } from '../services/GameRuntimeClient';
+import { WifiOff } from 'lucide-react';
 
 interface StreamStageProps {
   worldState: WorldState;
@@ -21,6 +23,7 @@ interface StreamStageProps {
   isVerticalMode: boolean;
   isObsStageOnly?: boolean;
   transparentBackground?: boolean;
+  syncStatus?: ServerSyncStatus;
   stats: CityStats;
   resources: CityResources;
   maxStorage?: CityResources;
@@ -37,6 +40,7 @@ export const StreamStage: React.FC<StreamStageProps> = ({
   isVerticalMode,
   isObsStageOnly = false,
   transparentBackground = false,
+  syncStatus,
   stats,
   resources,
   maxStorage,
@@ -140,6 +144,12 @@ export const StreamStage: React.FC<StreamStageProps> = ({
 
       {/* TOP OVERLAYS (HUD, Resources, Voting, Events) */}
       <div className="relative z-10 p-3 flex flex-col gap-2 pointer-events-none">
+        {isObsStageOnly && syncStatus === 'reconnecting' && (
+          <div className="self-center flex items-center gap-2 px-3 py-1 rounded-full bg-amber-950/80 border border-amber-500/50 text-amber-300 text-xs font-semibold animate-pulse shadow-lg backdrop-blur-md">
+            <WifiOff className="w-3.5 h-3.5 text-amber-400" />
+            <span>Mất kết nối máy chủ • Đang tự động kết nối lại...</span>
+          </div>
+        )}
         <StreamHUD
           stats={stats}
           resources={resources}

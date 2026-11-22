@@ -61,6 +61,37 @@ Tài liệu này ghi nhận kết quả rà soát kỹ thuật (Technical Audit)
 
 ---
 
+## 2. KẾT QUẢ RELEASE HARDENING & VERIFICATION AUDIT (P6)
+
+Sau khi hoàn thành P0–P5, dự án trải qua đợt kiểm toán phát hành cuối cùng (Release Hardening):
+
+### 2.1. Khắc phục lỗi `npm ci` Arborist desync (P0)
+- **Nguyên nhân:** `package.json` thiếu khai báo trực tiếp `vite`, phiên bản trong `package.json` và `package-lock.json` bị lệch dải phụ thuộc (`typescript`, `vitest`, `@types/node`). Khi `npm ci` chạy trên GitHub Actions (Node 22.x), Arborist gặp lỗi `Cannot read properties of null (reading 'edgesOut')`.
+- **Giải pháp:** Đồng bộ chuẩn xác `package.json` và `package-lock.json` (root version 0.2.0, khai báo `vite: ^8.3.8`, `typescript: ^6.0.3` thỏa mãn peer dependency), chạy `npm ci` thành công với 0 lỗ hổng bảo mật.
+
+### 2.2. Hoàn thiện Vite Preview Server Lifecycle (P0)
+- **Hiện trạng:** `vite.config.ts` chỉ có hook `configureServer()` (chỉ hỗ trợ `npm run dev`), thiếu hook `configurePreviewServer()`. Khi chạy `npm run preview`, các endpoint `/api/*` và `/ws` trả về 404.
+- **Giải pháp:** Trích xuất hàm `attachServer()` dùng chung cho cả `configureServer()` và `configurePreviewServer()`. Gắn HTTP middlewares và WebSocket upgrade vào đúng server instance; dọn dẹp lifecycle sạch sẽ khi HTTP server đóng (`httpServer.on('close')`). Đã kiểm thử thực tế cả Dev mode (`:3000`) và Preview mode (`:4173`).
+
+### 2.3. WebSocket Bridge Transport & Webhook Ingestion (P1)
+- **Triển khai:** Tạo `WebSocketBridgeTransport` (`src/core/adapters/WebSocketBridgeTransport.ts`) thực thi giao diện `ILiveBridgeTransport`. Tự động khởi tạo khi biến môi trường `TIKTOK_BRIDGE_URL` có giá trị `ws://` hoặc `wss://`.
+- **Webhook Ingestion:** Bắt buộc xác thực bằng `x-operator-token`. Kết nối trực tiếp `TikTokLiveAdapter` với `GameEngine.commandDispatcher`. Loại bỏ payload trùng lặp (`Deduplicator`), loại bỏ replay (giới hạn thời gian), trả về HTTP 400 nếu dữ liệu lỗi và HTTP 200 kèm broadcast realtime khi thành công.
+
+### 2.4. Triệt tiêu Split-Brain trên OBS Stage (P1)
+- **Nguyên nhân nguy cơ:** `GameRuntimeClient` trước đây tự khởi tạo `fallbackEngine` sau 2 lần reconnect thất bại, dẫn đến việc OBS Stage chạy một thế giới mô phỏng cục bộ không đồng bộ với Operator Dashboard.
+- **Giải pháp:** Ghi nhận cờ `isStageOnly`. OBS Stage (`/stage`) tuyệt đối **không** chạy fallback engine cục bộ, hiển thị trạng thái mất kết nối và tự động thử lại với thuật toán exponential backoff. Khi server phục hồi, client tự động đồng bộ từ authoritative snapshot của máy chủ.
+
+### 2.5. Thiết lập ESLint 10 & 5 Quality Gates Bắt Buộc
+- **Cấu hình:** Cài đặt `eslint` v10 và `typescript-eslint` với `eslint.config.js`. Script `npm run lint` chạy lệnh `eslint . --max-warnings 0`.
+- **5 Quality Gates đều vượt qua 100%:**
+  1. `npm ci`: PASS (181 packages audited, 0 vulnerabilities).
+  2. `npm run typecheck`: PASS (`tsc --noEmit` 0 errors).
+  3. `npm run lint`: PASS (`eslint . --max-warnings 0` 0 errors).
+  4. `npm test`: PASS (14/14 test files, 57/57 tests passed).
+  5. `npm run build`: PASS (`tsc && vite build` tạo bundle thành công trong `dist/`).
+
+---
+
 ## 2. LỘ TRÌNH TRIỂN KHAI & CHECKPOINT
 
 1. **Giai đoạn P0:** Sửa toàn bộ lỗi nền tảng (WorldState notification, Citizen cargo & FSM, Pathfinding Octile & obstacle check, CommandParser false-positive & RateLimiter GC, BuildingSystem collision & level check, Persistence v2 & migration) + Unit tests + Commit & Push.

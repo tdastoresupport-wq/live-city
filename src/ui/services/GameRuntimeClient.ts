@@ -24,6 +24,8 @@ export class GameRuntimeClient {
   public worldState: WorldState;
   public audioSystem: AudioSystem;
 
+  private isStageOnly = false;
+  private allowOfflineFallback = false;
   private fallbackEngine: GameEngine | null = null;
   private ws: WebSocket | null = null;
   private operatorToken = '';
@@ -90,8 +92,10 @@ export class GameRuntimeClient {
     }
   }
 
-  public async init(isStageOnly = false): Promise<void> {
+  public async init(isStageOnly = false, allowOfflineFallback = false): Promise<void> {
     if (this.destroyed) return;
+    this.isStageOnly = isStageOnly;
+    this.allowOfflineFallback = allowOfflineFallback;
 
     // 1. If operator dashboard, bootstrap local operator session token
     if (!isStageOnly) {
@@ -265,8 +269,10 @@ export class GameRuntimeClient {
     this.clearTimers();
     this.reconnectAttempts++;
 
-    if (this.reconnectAttempts >= 2 && !this.fallbackEngine) {
-      // Activate local fallback engine if server is completely unreachable
+    // Authoritative safety: OBS Stage MUST NEVER run an independent local simulation
+    // It remains strictly an authoritative viewer displaying connection status and retrying.
+    if (!this.isStageOnly && this.allowOfflineFallback && this.reconnectAttempts >= 2 && !this.fallbackEngine) {
+      // Activate local fallback engine only if explicitly permitted (e.g. standalone demo)
       this.startFallbackEngine();
     } else {
       this.clientState.syncStatus = 'reconnecting';

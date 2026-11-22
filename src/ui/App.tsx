@@ -123,6 +123,7 @@ export const App: React.FC = () => {
           isVerticalMode={true}
           isObsStageOnly={true}
           transparentBackground={isTransparentBg}
+          syncStatus={runtimeState.syncStatus}
           stats={stats}
           resources={resources}
           maxStorage={maxStorage}

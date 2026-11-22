@@ -116,7 +116,7 @@ export class PixiWorldRenderer {
     const w = this.app.screen.width;
     const h = this.app.screen.height;
 
-    let phase = 'day';
+    let phase: string;
     let alpha = 0;
     let color = 0x000000;
 

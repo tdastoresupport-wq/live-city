@@ -8,6 +8,7 @@ import {
   ExternalStreamPayload,
   ILiveBridgeTransport,
 } from '../core/adapters/TikTokLiveAdapter';
+import { WebSocketBridgeTransport } from '../core/adapters/WebSocketBridgeTransport';
 import {
   BuildingType,
   CityEventType,
@@ -54,9 +55,41 @@ export class GameServer {
       tickRateHz: 25,
     });
 
+    const bridgeUrl = process.env.TIKTOK_BRIDGE_URL || '';
+    const transport =
+      options.tiktokTransport ||
+      (bridgeUrl && (bridgeUrl.startsWith('ws://') || bridgeUrl.startsWith('wss://'))
+        ? new WebSocketBridgeTransport()
+        : undefined);
+
     this.tiktokAdapter = new TikTokLiveAdapter({
-      transport: options.tiktokTransport,
-      bridgeUrl: process.env.TIKTOK_BRIDGE_URL || '',
+      transport,
+      bridgeUrl,
+    });
+
+    // Wire TikTok adapter events directly to engine command dispatcher
+    this.tiktokAdapter.onComment((comment) => {
+      try {
+        this.engine.commandDispatcher.processComment(comment);
+      } catch (err) {
+        console.error('Error processing live comment:', err);
+      }
+    });
+
+    this.tiktokAdapter.onGift((gift) => {
+      try {
+        this.engine.commandDispatcher.processGift(gift);
+      } catch (err) {
+        console.error('Error processing live gift:', err);
+      }
+    });
+
+    this.tiktokAdapter.onLike((like) => {
+      try {
+        this.engine.commandDispatcher.processLike(like);
+      } catch (err) {
+        console.error('Error processing live like:', err);
+      }
     });
 
     // Listen to live adapter state changes and broadcast
@@ -581,9 +614,16 @@ export class GameServer {
       if (pathname === '/api/live/webhook') {
         const payload = body as unknown as ExternalStreamPayload;
         const accepted = this.tiktokAdapter.handleIncomingPayload(payload);
-        this.broadcastState();
-        res.writeHead(200, corsHeaders);
-        res.end(JSON.stringify({ ok: accepted }));
+        if (accepted) {
+          this.scheduleBroadcast(true);
+        }
+        res.writeHead(accepted ? 200 : 400, corsHeaders);
+        res.end(
+          JSON.stringify({
+            ok: accepted,
+            error: accepted ? undefined : 'Payload rejected (duplicate, malformed or expired)',
+          })
+        );
         return;
       }
     }
